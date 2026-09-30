@@ -542,6 +542,9 @@ export interface LLMOptions {
   maxTokens?: number;
   streaming?: boolean;
   deepThinking?: boolean;
+  /// 失败重试次数（LangChain AsyncCaller 的 maxRetries，默认 6）：
+  /// 手机端希望端点不通时快点把失败报出来，而不是转圈几分钟。
+  maxRetries?: number;
 }
 
 export function resolveActiveEndpoint(config: AIConfig): {
@@ -602,6 +605,7 @@ export async function createChatModelFromEndpoint(
   const maxTokens = options.maxTokens ?? 8192;
   const streaming = options.streaming ?? true;
   const endpointFetch = getEndpointFetch(endpoint, model);
+  const retryOptions = options.maxRetries === undefined ? {} : { maxRetries: options.maxRetries };
 
   switch (endpoint.provider) {
     case "anthropic": {
@@ -610,6 +614,7 @@ export async function createChatModelFromEndpoint(
       const anthropicConfig: Record<string, unknown> = {
         model,
         apiKey,
+        ...retryOptions,
         temperature: options.deepThinking ? 1 : temperature,
         maxTokens,
         streaming,
@@ -657,6 +662,7 @@ export async function createChatModelFromEndpoint(
           fetch: endpointFetch,
         },
         __includeRawResponse: true,
+        ...retryOptions,
         modelKwargs: {
           extra_body: {
             google: {
@@ -738,6 +744,7 @@ export async function createChatModelFromEndpoint(
       return new ChatDeepSeekFixed({
         model,
         apiKey,
+        ...retryOptions,
         configuration: {
           ...(endpoint.baseUrl ? { baseURL: getEndpointBaseUrl(endpoint) } : {}),
           fetch: endpointFetch,
@@ -813,6 +820,7 @@ export async function createChatModelFromEndpoint(
         return new ChatDeepSeekFixed({
           model,
           apiKey,
+          ...retryOptions,
           configuration: {
             ...(endpoint.baseUrl ? { baseURL: getEndpointBaseUrl(endpoint) } : {}),
             fetch: endpointFetch,
@@ -839,6 +847,7 @@ export async function createChatModelFromEndpoint(
         temperature,
         maxTokens,
         streaming,
+        ...retryOptions,
         ...(isLocalProvider ? { modelKwargs: { think: true } } : {}),
       });
     }

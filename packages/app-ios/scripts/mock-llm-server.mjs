@@ -43,6 +43,22 @@ function replyFor(payload) {
     ].join("\n");
   }
 
+  // 工具调用格式的回复（DeepSeek 系模型的 ｜DSML｜ 标记）：真机上模型在「系统提示说有工具、
+  // 客户端却没绑工具」时会把工具调用当正文吐出来，用例断言客户端不会把这坨 markup 当正文显示。
+  if (/暗号：工具调用/.test(prompt)) {
+    const bar = "\uFF5C";
+    const tag = (name) => `<${bar}${bar}DSML${bar}${bar} ${name}>`;
+    const close = (name) => `</${bar}${bar}DSML${bar}${bar} ${name}>`;
+    return head + [
+      tag("calls"),
+      tag('invoke name="getSurroundingContext"'),
+      tag('parameter name="includeSelection" string="true">true'),
+      close("parameter"),
+      close("invoke"),
+      close("calls"),
+    ].join("\n");
+  }
+
   // Mermaid：给一个流程图，用例断言对话里出现图表（不是代码块）。
   if (/暗号：mermaid/.test(prompt)) {
     return head + [
@@ -83,6 +99,7 @@ const server = createServer((req, res) => {
     return;
   }
 
+  console.log(`[req] ${req.method} ${req.url}`);
   let raw = "";
   req.on("data", (chunk) => {
     raw += chunk;
@@ -118,7 +135,9 @@ const server = createServer((req, res) => {
       "cache-control": "no-cache",
       connection: "keep-alive",
     });
-    for (const piece of [...replyFor(payload)]) {
+    const reply = replyFor(payload);
+    console.log(`[stream] ${[...reply].length} chars`);
+    for (const piece of [...reply]) {
       res.write(sse(piece));
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
@@ -133,6 +152,7 @@ const server = createServer((req, res) => {
     );
     res.write("data: [DONE]\n\n");
     res.end();
+    console.log("[done]");
   });
 });
 

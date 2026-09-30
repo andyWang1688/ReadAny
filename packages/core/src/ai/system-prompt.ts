@@ -37,7 +37,7 @@ interface PromptContext {
 /** Build the full system prompt from context */
 export function buildSystemPrompt(ctx: PromptContext): string {
   const sections: string[] = [
-    buildRoleSection(),
+    buildRoleSection(ctx.allowedToolNames),
     buildBookContextSection(ctx.book),
     buildMemorySection(ctx.memorySummary),
     buildSemanticSection(ctx.semanticContext),
@@ -68,8 +68,18 @@ function buildMemorySection(memorySummary?: string): string {
   return ["## Conversation Memory", memorySummary.trim()].join("\n");
 }
 
-function buildRoleSection(): string {
-  return `You are ReadAny AI, an intelligent reading assistant. You help users understand, analyze, and engage with the books they are reading. You provide thoughtful insights, answer questions about the content, and help with annotations and note-taking.
+function buildRoleSection(allowedToolNames?: string[]): string {
+  const head = `You are ReadAny AI, an intelligent reading assistant. You help users understand, analyze, and engage with the books they are reading. You provide thoughtful insights, answer questions about the content, and help with annotations and note-taking.`;
+
+  // 这一回合没有工具可调时（书灯 iOS 端就是这种情况：正文和检索原文由宿主直接注入），
+  // 提示里不能再说「必须先用工具取原文」——模型会照着去吐工具调用标记，读者看到的就是乱码。
+  if (Array.isArray(allowedToolNames) && allowedToolNames.length === 0) {
+    return `${head}
+
+**CRITICAL: You have no tools this turn — never output tool-call syntax and never claim to have called a tool. Answer from the reading context already provided in this conversation (book metadata, the reader's current page, the selected text). If that context is not enough, say so plainly instead of inventing book content.**`;
+  }
+
+  return `${head}
 
 **CRITICAL: You do NOT have access to the book's content in your training data. You MUST use the provided tools to retrieve book content before answering any content-related questions. NEVER fabricate, guess, or rely on your own knowledge about the book. If you cannot retrieve the content, tell the user honestly.**`;
 }

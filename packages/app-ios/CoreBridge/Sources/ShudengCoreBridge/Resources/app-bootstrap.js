@@ -230,6 +230,24 @@
     return JSON.stringify(value ?? null);
   }
 
+  // 端点报错原样是英文短句（Connection error. / 401 …），读者看不懂也不知道下一步做什么。
+  function friendlyChatError(message) {
+    const text = String(message || "").trim();
+    if (/connection error|fetch failed|connection refused|network|offline|econn|timed?\s?out|timeout/i.test(text)) {
+      return "连不上这个模型端点。检查一下网络，或者到「我的 → AI 设置」确认地址和模型名。";
+    }
+    if (/401|unauthorized|invalid api key|authentication/i.test(text)) {
+      return "端点说这个 API Key 不对或没权限（401）。到「我的 → AI 设置」检查 Key。";
+    }
+    if (/404|not found/i.test(text)) {
+      return "端点找不到这个模型或地址（404）。到「我的 → AI 设置」检查模型名和地址。";
+    }
+    if (/429|rate limit|quota/i.test(text)) {
+      return "请求太频繁或额度用完了（429），等一会儿再试。";
+    }
+    return `模型端点报错：${text}`;
+  }
+
   const chatModels = new Map();
   const chatControllers = new Map();
   // 用户可能在模型还没建好时就点了「停止」，先记下来，等 controller 建好立刻中断。
@@ -240,7 +258,9 @@
     const cached = chatModels.get(key);
     if (cached) return cached;
 
-    const instance = await core.ai.createChatModelFromEndpoint(endpoint, model);
+    // 失败重试压到 1 次（core 默认 6 次）：端点不通/断网时，手机上一分钟内就该看到
+    // 「连不上」的错误，而不是盯着「正在生成…」转好几分钟。
+    const instance = await core.ai.createChatModelFromEndpoint(endpoint, model, { maxRetries: 1 });
     chatModels.set(key, instance);
     return instance;
   }
@@ -1080,6 +1100,10 @@
             enabledSkills: skill ? [skill.id] : [],
             isVectorized: false,
             userLanguage: payload.language || "zh",
+            // 书灯没有工具执行器（工具要回读阅读器状态、写批注，宿主这一版还没接），
+            // 所以一个工具都不广播：模型直接拿下面注入的正文和检索原文作答，
+            // 而不是把「｜DSML｜ / tool_calls」这类调用标记当正文吐出来——读者看到就是乱码。
+            allowedToolNames: [],
           }),
         );
         if (payload.contextText) {
@@ -1158,6 +1182,68 @@
         const emitReasoning = (text) => {
           if (text) emitChat(requestId, { type: "reasoning", text });
         };
+        // 工具调用标记不是正文：DeepSeek 系的「｜DSML｜」、各家的 tool_calls XML，
+        // 直接显示给读者就是乱码。这里按行滤掉，并保证不会把半个标记放出去。
+        // 形如「<｜｜DSML｜｜ calls>」的整枚标记，以及没有尖括号的裸标记。
+        const dsmlTag = /<[^<>]*\uFF5C\uFF5C\s*DSML\s*\uFF5C\uFF5C[^<>]*>/g;
+        const dsmlBare = /\uFF5C\uFF5C\s*DSML\s*\uFF5C\uFF5C[^<>]*>?/g;
+        const toolCallTag =
+          /<\/?(?:tool_calls?|function_calls?|function_call|invoke|parameter)\b[^>]*>/gi;
+        const toolMarkupProbe =
+          /<[^<>]*\uFF5C\uFF5C\s*DSML|\uFF5C\uFF5C\s*DSML|<\/?(?:tool_calls?|function_calls?|function_call|invoke|parameter)\b/;
+        let droppedToolMarkup = false;
+        const cleanBodyLine = (line) => {
+          const trimmed = line.trim();
+          if (!trimmed) return "";
+          // 整行就是一个标记（工具调用几乎都是这种形状）：连参数值一起丢掉。
+          if (trimmed.startsWith("<") && toolMarkupProbe.test(trimmed)) {
+            droppedToolMarkup = true;
+            return "";
+          }
+          const cleaned = line
+            .replace(dsmlTag, "")
+            .replace(dsmlBare, "")
+            .replace(toolCallTag, "")
+            .trimEnd();
+          if (!cleaned && trimmed) droppedToolMarkup = true;
+          return cleaned;
+        };
+        let bodyCarry = "";
+        let bodyEmitted = false;
+        const forwardBody = (text) => {
+          if (!text) return;
+          bodyCarry += text;
+          let out = "";
+          for (;;) {
+            const at = bodyCarry.indexOf("\n");
+            if (at < 0) break;
+            const line = cleanBodyLine(bodyCarry.slice(0, at));
+            if (line) out += `${line}\n`;
+            bodyCarry = bodyCarry.slice(at + 1);
+          }
+          // 整行还没换行时也要边收边显示：先放一截，尾部留一点，
+          // 免得把半个标记（或半个正文）当成另一段发出去。
+          if (bodyCarry.length > 160) {
+            let cut = bodyCarry.length - 24;
+            const lastOpen = bodyCarry.lastIndexOf("<", cut);
+            if (lastOpen >= 0 && lastOpen > bodyCarry.lastIndexOf(">", cut)) cut = lastOpen;
+            const head = cleanBodyLine(bodyCarry.slice(0, cut));
+            if (head) out += head;
+            bodyCarry = bodyCarry.slice(cut);
+          }
+          if (out) {
+            bodyEmitted = true;
+            emitChat(requestId, { type: "chunk", text: out });
+          }
+        };
+        const flushBody = () => {
+          const line = cleanBodyLine(bodyCarry);
+          bodyCarry = "";
+          if (line) {
+            bodyEmitted = true;
+            emitChat(requestId, { type: "chunk", text: line });
+          }
+        };
         const splitThinkTags = (input) => {
           thinkCarry += input;
           const events = [];
@@ -1188,7 +1274,7 @@
         const emitStreamEvents = (events) => {
           for (const [mode, text] of events) {
             if (mode === "reasoning") emitReasoning(text);
-            else emitChat(requestId, { type: "chunk", text });
+            else forwardBody(text);
           }
         };
         const takeChunkContent = (chunk) => {
@@ -1226,7 +1312,17 @@
           const tail = thinkCarry;
           thinkCarry = "";
           if (thinkMode === "reasoning") emitReasoning(tail);
-          else emitChat(requestId, { type: "chunk", text: tail });
+          else forwardBody(tail);
+        }
+        flushBody();
+        // 整段回答都是工具调用标记时界面会是一片空白：给读者一句能看懂的话。
+        if (!bodyEmitted) {
+          emitChat(requestId, {
+            type: "chunk",
+            text: droppedToolMarkup
+              ? "这次模型只回了工具调用指令，没有正文。可以再发一次，或在「我的 → AI 设置」里换个模型。"
+              : "模型这次没有返回内容，再发一次试试。",
+          });
         }
 
         emitChat(requestId, { type: "done", aborted: controller.signal.aborted === true });
@@ -1237,7 +1333,9 @@
           emitChat(requestId, { type: "done", aborted: true });
           return "aborted";
         }
-        emitChat(requestId, { type: "error", message: String((error && error.message) || error) });
+        const message = String((error && error.message) || error);
+        console.warn(`[Chat] 请求失败：${message}`);
+        emitChat(requestId, { type: "error", message: friendlyChatError(message) });
         return "error";
       } finally {
         chatControllers.delete(requestId);

@@ -52,6 +52,11 @@ test -n "$IDENTITY" || { echo "钥匙串里没有 Apple Development 证书" >&2;
 echo "描述文件: $PROFILE"
 echo "签名证书: $IDENTITY"
 
+# Shudeng/Resources/core.js 是不入库的构建产物，Xcode 自己不会刷新它。
+# 不在这里重建 + 同步的话，packages/core 里的改动（提示词、模型参数…）
+# 会一直用上次同步的旧版本打包，装到手机上才发现「改了没生效」。
+(cd "$REPO_ROOT" && pnpm ios:core && pnpm ios:assets)
+
 # 构建失败必须在这里停住：以前 `| grep ... || true` 会把错误吞掉，
 # 结果把上一次的（或残缺的）产物继续签名打成 IPA，装到手机上才发现没生效。
 BUILD_LOG="$(mktemp /private/tmp/shudeng-build.XXXXXX)"

@@ -59,6 +59,11 @@ final class ChatService: ObservableObject {
     private var observerID: UUID?
     private var loadedInitialThread = false
     private var thinkingStartedAt: Date?
+    /// 已经落库的回答 id：用户点「停止」和稍后到达的 done 都走持久化，别插两条。
+    private var persistedReplyID: String?
+    /// 端点没回应时的看门狗：连续这么长时间一个事件都没有就中断这一轮。
+    private static let idleTimeout: TimeInterval = 90
+    private var watchdog: Task<Void, Never>?
 
     func attach(to runtime: RuntimeHost) {
         self.runtime = runtime
@@ -80,7 +85,16 @@ final class ChatService: ObservableObject {
     func refreshThreads(using runtime: RuntimeHost) {
         guard runtime.state == .ready else { return }
         let json = runtime.appJSONOr("ShudengApp.listThreads({})", fallback: "[]", timeout: 60)
-        threads = (try? JSONDecoder().decode([ChatThread].self, from: Data(json.utf8))) ?? []
+        // 一条脏数据不该让整个历史列表消失：逐条解，坏行跳过。
+        guard let rows = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [Any] else {
+            threads = []
+            return
+        }
+        let decoder = JSONDecoder()
+        threads = rows.compactMap { row in
+            guard let data = try? JSONSerialization.data(withJSONObject: row) else { return nil }
+            return try? decoder.decode(ChatThread.self, from: data)
+        }
     }
 
     func startNewThread() {
@@ -89,11 +103,14 @@ final class ChatService: ObservableObject {
         activeThreadId = nil
         activeThreadTitle = nil
         messages.removeAll()
+        persistedReplyID = nil
         error = nil
     }
 
     func open(_ thread: ChatThread, using runtime: RuntimeHost) {
-        guard !isStreaming, runtime.state == .ready else { return }
+        guard runtime.state == .ready else { return }
+        // 正在生成时点了别的会话：先把这一轮停掉（半截回答照样落库），再切过去。
+        if isStreaming { stop() }
         struct Loaded: Decodable {
             struct Stored: Decodable {
                 let id: String
@@ -115,6 +132,7 @@ final class ChatService: ObservableObject {
         messages = loaded.messages.map {
             Message(id: $0.id, role: $0.role == "assistant" ? .assistant : .user, text: $0.content)
         }
+        persistedReplyID = messages.last?.role == .assistant ? messages.last?.id : nil
         error = nil
     }
 
@@ -146,13 +164,15 @@ final class ChatService: ObservableObject {
             return
         }
 
-        ensureThread(book: book, firstMessage: trimmed, using: runtime)
+        guard ensureThread(book: book, firstMessage: trimmed, using: runtime) else { return }
         messages.append(Message(role: .user, text: trimmed))
         messages.append(Message(role: .assistant, text: ""))
+        persistedReplyID = nil
         isStreaming = true
         error = nil
         contextNote = nil
         thinkingStartedAt = nil
+        armWatchdog()
 
         if let threadId = activeThreadId {
             _ = runtime.appJSONOr(
@@ -210,6 +230,7 @@ final class ChatService: ObservableObject {
             // 不阻塞主线程：token 由 __nativeChatEvent 推给 handle()，结束时再收 done。
             try runtime.startApp("ShudengApp.chat(\(json))")
         } catch {
+            watchdog?.cancel()
             self.error = String(describing: error)
             isStreaming = false
         }
@@ -218,7 +239,12 @@ final class ChatService: ObservableObject {
     func stop() {
         guard let runtime, let requestID else { return }
         _ = runtime.evaluate("ShudengApp.abortChat('\(requestID)')")
+        watchdog?.cancel()
         isStreaming = false
+        finishThinking()
+        dropEmptyAssistant()
+        // 停下来的半截回答也是回答：落库，别让历史里只剩提问。
+        persistAssistantReply(using: runtime)
     }
 
     /// 顶部「清空」：开一段新对话，旧对话留在「会话」列表里，不会丢。
@@ -228,8 +254,13 @@ final class ChatService: ObservableObject {
 
     // MARK: - 内部
 
-    private func ensureThread(book: LibraryStore.Book?, firstMessage: String, using runtime: RuntimeHost) {
-        guard activeThreadId == nil else { return }
+    @discardableResult
+    private func ensureThread(
+        book: LibraryStore.Book?,
+        firstMessage: String,
+        using runtime: RuntimeHost
+    ) -> Bool {
+        guard activeThreadId == nil else { return true }
         var body: [String: Any] = ["title": String(firstMessage.prefix(24))]
         if let book { body["bookId"] = book.id }
         struct Created: Decodable { let id: String }
@@ -238,16 +269,27 @@ final class ChatService: ObservableObject {
             fallback: "{}",
             timeout: 30
         )
-        guard let created = try? JSONDecoder().decode(Created.self, from: Data(json.utf8)) else { return }
+        guard let created = try? JSONDecoder().decode(Created.self, from: Data(json.utf8)) else {
+            // 静默失败的话，问题问了、回答也回来了，历史里却什么都没有。
+            self.error = "这段对话没能存到本地，先检查一下存储空间再问一次。"
+            return false
+        }
         activeThreadId = created.id
+        activeThreadTitle = String(firstMessage.prefix(24))
+        // 会话建出来就立刻刷进会话列表：等回答结束才刷新的话，
+        // 用户在生成过程中打开「会话」会以为这段对话没存下来。
+        refreshThreads(using: runtime)
+        return true
     }
 
     private func persistAssistantReply(using runtime: RuntimeHost) {
         guard let threadId = activeThreadId,
               let reply = messages.last,
               reply.role == .assistant,
+              reply.id != persistedReplyID,
               !reply.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
+        persistedReplyID = reply.id
         _ = runtime.appJSONOr(
             "ShudengApp.appendMessage(\(Self.payload(["threadId": threadId, "role": "assistant", "content": reply.text])))",
             fallback: "{}",
@@ -256,12 +298,40 @@ final class ChatService: ObservableObject {
         refreshThreads(using: runtime)
     }
 
+    // MARK: - 看门狗
+
+    /// 端点连不上或不再吐字时，界面以前会一直停在「正在生成…」，历史里也什么都留不下。
+    /// 每次收到事件就重新计时，连续 90 秒没有任何动静就当这一轮失败。
+    private func armWatchdog() {
+        watchdog?.cancel()
+        watchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.idleTimeout * 1_000_000_000))
+            guard !Task.isCancelled, let self, self.isStreaming else { return }
+            self.abortForTimeout()
+        }
+    }
+
+    private func abortForTimeout() {
+        guard isStreaming else { return }
+        if let runtime, let requestID {
+            _ = runtime.evaluate("ShudengApp.abortChat('\(requestID)')")
+        }
+        isStreaming = false
+        finishThinking()
+        dropEmptyAssistant()
+        error = "模型 \(Int(Self.idleTimeout)) 秒没有回应，已经中断这一轮。检查一下端点和网络，或者再发一次。"
+        if let runtime { persistAssistantReply(using: runtime) }
+    }
+
     private func handle(requestID: String, eventJSON: String) {
         guard requestID == self.requestID,
               let data = eventJSON.data(using: .utf8),
               let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = event["type"] as? String
         else { return }
+
+        // 有事件就说明连接活着，重新计时。
+        if type == "chunk" || type == "reasoning" || type == "context" { armWatchdog() }
 
         switch type {
         case "chunk":
@@ -279,13 +349,18 @@ final class ChatService: ObservableObject {
                 ? "已引用书里的 \(count) 段原文"
                 : "已引用：\(chapters.prefix(2).joined(separator: "、"))"
         case "done":
+            watchdog?.cancel()
             isStreaming = false
             finishThinking()
             if let runtime { persistAssistantReply(using: runtime) }
         case "error":
+            watchdog?.cancel()
             error = event["message"] as? String ?? "未知错误"
             isStreaming = false
             finishThinking()
+            dropEmptyAssistant()
+            // 出错前半截回答已经显示在屏幕上了，也存下来。
+            if let runtime { persistAssistantReply(using: runtime) }
         default:
             break
         }
@@ -299,6 +374,15 @@ final class ChatService: ObservableObject {
     private func appendReasoning(_ text: String) {
         guard let index = messages.lastIndex(where: { $0.role == .assistant }) else { return }
         messages[index].reasoning += text
+    }
+
+    /// 这一轮一个字都没回来（连不上 / 立刻停止）：别在屏幕上留一个空的「…」气泡。
+    private func dropEmptyAssistant() {
+        guard let last = messages.last, last.role == .assistant,
+              last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              last.reasoning.isEmpty
+        else { return }
+        messages.removeLast()
     }
 
     /// 思考结束：把「想了多久」记到这轮回答上，界面上折叠成一条「已思考 N 秒」。
