@@ -72,6 +72,9 @@ export {
   getChunks,
   insertChunks,
   deleteChunks,
+  getVectorIndexProvenance,
+  setVectorIndexProvenance,
+  deleteVectorIndexProvenance,
   clearVectorizationFlagsWithoutLocalChunks,
   // Skill queries
   getSkills,

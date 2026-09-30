@@ -32,6 +32,15 @@ export interface VectorizeTriggerConfig {
   vectorModelEnabled: boolean;
   vectorModelMode: "builtin" | "remote";
   selectedBuiltinModelId: string | null;
+  /**
+   * 平台自带的端侧向量模型（iOS: Apple NLEmbedding）。
+   * 给了就走它，不再加载 Transformers.js 的模型文件：移动端不用为了语义索引下几百 MB。
+   */
+  nativeEmbedder?: {
+    modelId: string;
+    embed: (texts: string[]) => Promise<number[][]>;
+    dimensions?: number;
+  };
   remoteModel: {
     url: string;
     apiKey: string;
@@ -152,7 +161,9 @@ export async function triggerVectorizeBook(
     await yieldToUI();
 
     // Phase 2: Generate embeddings
-    if (config.vectorModelMode === "builtin") {
+    if (config.nativeEmbedder) {
+      await generateNativeEmbeddings(allChunks, config.nativeEmbedder, progress, onProgress);
+    } else if (config.vectorModelMode === "builtin") {
       await generateBuiltinEmbeddings(
         allChunks,
         config.selectedBuiltinModelId,
@@ -268,6 +279,13 @@ function getEmbeddingProvenance(
   config: VectorizeTriggerConfig,
   actualDimensions: number,
 ): EmbeddingProvenance {
+  if (config.nativeEmbedder) {
+    return {
+      kind: "builtin",
+      modelId: config.nativeEmbedder.modelId,
+      dimensions: actualDimensions || config.nativeEmbedder.dimensions || 0,
+    };
+  }
   if (config.vectorModelMode === "builtin") {
     const model = BUILTIN_EMBEDDING_MODELS.find((candidate) => candidate.id === config.selectedBuiltinModelId);
     if (!model) throw new Error("Cannot save provenance for an unknown built-in embedding model.");
@@ -281,6 +299,37 @@ function getEmbeddingProvenance(
     endpoint: normalizeEmbeddingEndpoint(config.remoteModel.url),
     dimensions: actualDimensions || config.remoteModel.dimension || 0,
   };
+}
+
+/** Generate embeddings using the platform's own on-device model (iOS: Apple NLEmbedding) */
+async function generateNativeEmbeddings(
+  chunks: Array<{ content: string; embedding?: number[] }>,
+  embedder: { modelId: string; embed: (texts: string[]) => Promise<number[][]>; dimensions?: number },
+  progress: VectorizeProgress,
+  onProgress?: VectorizeStatusCallback,
+) {
+  // 端侧模型是同步算的（NLEmbedding），批太大就把主线程占住了。
+  const batchSize = 8;
+
+  for (let i = 0; i < chunks.length; i += batchSize) {
+    const batch = chunks.slice(i, i + batchSize);
+    const embeddings = await embedder.embed(batch.map((chunk) => chunk.content));
+    for (let j = 0; j < batch.length; j++) {
+      batch[j].embedding = embeddings[j] ?? [];
+    }
+    if (i === 0 && !batch[0]?.embedding?.length) {
+      throw new Error(`端侧向量模型 ${embedder.modelId} 没有产出向量`);
+    }
+
+    progress.processedChunks = Math.min(i + batchSize, chunks.length);
+    eventBus.emit("vectorize:progress", {
+      bookId: progress.bookId,
+      progress: progress.processedChunks / progress.totalChunks,
+      status: "embedding",
+    });
+    onProgress?.(progress);
+    await yieldToUI();
+  }
 }
 
 /** Generate embeddings using a built-in Transformers.js model (via Web Worker) */

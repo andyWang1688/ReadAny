@@ -3,6 +3,16 @@
  */
 import { getBooks, getReadingSessions, getReadingSessionsByDateRange } from "../db/database";
 
+/**
+ * 本地时区的 YYYY-MM-DD。
+ * 统计按「用户眼里的那一天」聚合，不能和 UTC 日期混用（UTC+8 会把上午 8 点后的阅读算到前一天桶里）。
+ */
+function localDateKey(date: Date): string {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
 export interface DailyStats {
   date: string; // YYYY-MM-DD
   totalTime: number; // minutes
@@ -56,7 +66,7 @@ export class ReadingStatsService {
     const grouped = new Map<string, DailyStats>();
 
     for (const session of sessions) {
-      const date = new Date(session.startedAt).toISOString().split("T")[0];
+      const date = localDateKey(new Date(session.startedAt));
       const existing = grouped.get(date) || {
         date,
         totalTime: 0,
@@ -77,7 +87,7 @@ export class ReadingStatsService {
     const result: DailyStats[] = [];
     const current = new Date(startDate);
     while (current <= endDate) {
-      const dateStr = current.toISOString().split("T")[0];
+      const dateStr = localDateKey(current);
       result.push(
         grouped.get(dateStr) || {
           date: dateStr,
@@ -134,7 +144,7 @@ export class ReadingStatsService {
         totalSessions++;
         totalPages += session.pagesRead;
         totalCharactersRead += session.charactersRead ?? 0;
-        readingDays.add(new Date(session.startedAt).toISOString().split("T")[0]);
+        readingDays.add(localDateKey(new Date(session.startedAt)));
         readBookIds.add(book.id);
       }
     }
@@ -253,8 +263,10 @@ export class ReadingStatsService {
     }
 
     // Check if current streak is active (includes today or yesterday)
-    const today = new Date().toISOString().split("T")[0];
-    const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+    const today = localDateKey(new Date());
+    const yesterdayDate = new Date();
+    yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+    const yesterday = localDateKey(yesterdayDate);
 
     if (readingDays.has(today) || readingDays.has(yesterday)) {
       // Count backwards from the most recent date

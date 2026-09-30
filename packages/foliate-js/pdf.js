@@ -783,6 +783,14 @@ async function _buildPDFBook(pdf, fileName) {
       return [null, null];
     }
   };
+  // 每页一个 section，没有真正的 CFI：foliate 给我们回填的是 fake.fromIndex(index)（/6/(index+1)*2），
+  // 这里按同一套规则解回去，读完关掉再打开才能回到原来那一页。
+  book.resolveCFI = (cfi) => {
+    const match = /\/6\/(\d+)/.exec(String(cfi ?? ""));
+    const parsed = match ? Number(match[1]) / 2 - 1 : 0;
+    const index = Number.isFinite(parsed) ? Math.floor(parsed) : 0;
+    return { index: Math.max(0, Math.min(numPages - 1, index)) };
+  };
   book.getTOCFragment = (doc) => doc.documentElement;
   book.getCover = async () => renderPageAsBlob(await pdf.getPage(1));
   book.destroy = () => pdf.destroy();

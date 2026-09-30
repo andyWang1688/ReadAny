@@ -1,0 +1,5 @@
+CoreBridge/Generated/
+CoreBridge/.build/
+scripts/core-bundle-meta.json
+Shudeng/Resources/core.js
+Shudeng/Resources/reader.html
