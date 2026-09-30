@@ -7,9 +7,23 @@ import { createServer } from "node:http";
 
 const port = Number(process.argv[2] || 8799);
 
+function textOf(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => (typeof part === "string" ? part : (part?.text ?? ""))).join("");
+  }
+  return "";
+}
+
 function promptOf(payload) {
+  return (payload.messages || []).map((message) => textOf(message.content)).join("\n");
+}
+
+/// 系统提示单独取出来：用来断言 App 真的没有再广播工具指令。
+function systemOf(payload) {
   return (payload.messages || [])
-    .map((message) => (typeof message.content === "string" ? message.content : ""))
+    .filter((message) => message.role === "system")
+    .map((message) => textOf(message.content))
     .join("\n");
 }
 
@@ -78,6 +92,14 @@ function replyFor(payload) {
   // 技能：core 的 SkillExecutor 会发「Execute skill: <名字>」，回显一下证明技能真的注入了。
   const skill = /Execute skill: ([^\n]+)/.exec(prompt);
   if (skill) return head + `技能答复：${skill[1].trim()}。`;
+
+  // 系统提示自检：没有工具执行器的一方不该再写「必须用工具取原文」，
+  // 否则 DeepSeek 会把 ｜DSML｜ 工具调用当正文吐出来（读者看到的就是乱码）。
+  if (/暗号：系统提示/.test(prompt)) {
+    return systemOf(payload).includes("MUST use the provided tools")
+      ? "系统提示里还有工具指令。"
+      : "系统提示里没有工具指令。";
+  }
 
   const marker = /暗号：([^。\n]+)/.exec(prompt);
   return head + (marker ? `收到，暗号是${marker[1]}。` : "收到，这是模拟回复。");

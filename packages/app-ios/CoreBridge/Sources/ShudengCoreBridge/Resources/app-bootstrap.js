@@ -248,6 +248,41 @@
     return `模型端点报错：${text}`;
   }
 
+  // 工具调用标记不是正文：DeepSeek 系的「｜DSML｜」、各家的 tool_calls XML，
+  // 直接显示给读者就是乱码。形如「<｜｜DSML｜｜ calls>」的整枚标记，以及没有尖括号的裸标记。
+  const dsmlTagRe = /<[^<>]*\uFF5C\uFF5C\s*DSML\s*\uFF5C\uFF5C[^<>]*>/g;
+  const dsmlBareRe = /\uFF5C\uFF5C\s*DSML\s*\uFF5C\uFF5C[^<>]*>?/g;
+  const toolCallTagRe = /<\/?(?:tool_calls?|function_calls?|function_call|invoke|parameter)\b[^>]*>/gi;
+  const toolMarkupProbeRe =
+    /<[^<>]*\uFF5C\uFF5C\s*DSML|\uFF5C\uFF5C\s*DSML|<\/?(?:tool_calls?|function_calls?|function_call|invoke|parameter)\b/;
+  const toolMarkupFallback =
+    "这次模型只回了工具调用指令，没有正文。可以再发一次，或在「我的 → AI 设置」里换个模型。";
+
+  function cleanBodyLine(line) {
+    const trimmed = line.trim();
+    if (!trimmed) return "";
+    // 整行就是一个标记（工具调用几乎都是这种形状）：连参数值一起丢掉。
+    if (trimmed.startsWith("<") && toolMarkupProbeRe.test(trimmed)) return "";
+    return line
+      .replace(dsmlTagRe, "")
+      .replace(dsmlBareRe, "")
+      .replace(toolCallTagRe, "")
+      .trimEnd();
+  }
+
+  /// 展示用：一段完整文本（历史消息、会话列表摘要）洗掉工具标记，整段都是标记时给一句人话。
+  function readableBody(text) {
+    const source = String(text == null ? "" : text);
+    const cleaned = source
+      .split("\n")
+      .map(cleanBodyLine)
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+    if (cleaned) return cleaned;
+    return toolMarkupProbeRe.test(source) ? toolMarkupFallback : "";
+  }
+
   const chatModels = new Map();
   const chatControllers = new Map();
   // 用户可能在模型还没建好时就点了「停止」，先记下来，等 controller 建好立刻中断。
@@ -719,7 +754,9 @@
           updatedAt: thread.updatedAt,
           messageCount: (thread.messages || []).length,
           lastMessage: (thread.messages || []).length
-            ? String(thread.messages[thread.messages.length - 1].content || "").slice(0, 60)
+            ? readableBody(thread.messages[thread.messages.length - 1].content)
+                .replace(/\s+/g, " ")
+                .slice(0, 60)
             : "",
         })),
       );
@@ -738,7 +775,8 @@
         messages: (thread.messages || []).map((message) => ({
           id: message.id,
           role: message.role,
-          content: message.content,
+          // 历史里以前存下来的工具调用标记也洗掉：老对话打开就是一片「乱码」很吓人。
+          content: readableBody(message.content),
           createdAt: message.createdAt,
         })),
       });
@@ -1182,30 +1220,12 @@
         const emitReasoning = (text) => {
           if (text) emitChat(requestId, { type: "reasoning", text });
         };
-        // 工具调用标记不是正文：DeepSeek 系的「｜DSML｜」、各家的 tool_calls XML，
-        // 直接显示给读者就是乱码。这里按行滤掉，并保证不会把半个标记放出去。
-        // 形如「<｜｜DSML｜｜ calls>」的整枚标记，以及没有尖括号的裸标记。
-        const dsmlTag = /<[^<>]*\uFF5C\uFF5C\s*DSML\s*\uFF5C\uFF5C[^<>]*>/g;
-        const dsmlBare = /\uFF5C\uFF5C\s*DSML\s*\uFF5C\uFF5C[^<>]*>?/g;
-        const toolCallTag =
-          /<\/?(?:tool_calls?|function_calls?|function_call|invoke|parameter)\b[^>]*>/gi;
-        const toolMarkupProbe =
-          /<[^<>]*\uFF5C\uFF5C\s*DSML|\uFF5C\uFF5C\s*DSML|<\/?(?:tool_calls?|function_calls?|function_call|invoke|parameter)\b/;
+        // 按行滤掉工具调用标记，并保证不会把半个标记放出去（规则见 cleanBodyLine）。
         let droppedToolMarkup = false;
-        const cleanBodyLine = (line) => {
+        const cleanStreamLine = (line) => {
           const trimmed = line.trim();
-          if (!trimmed) return "";
-          // 整行就是一个标记（工具调用几乎都是这种形状）：连参数值一起丢掉。
-          if (trimmed.startsWith("<") && toolMarkupProbe.test(trimmed)) {
-            droppedToolMarkup = true;
-            return "";
-          }
-          const cleaned = line
-            .replace(dsmlTag, "")
-            .replace(dsmlBare, "")
-            .replace(toolCallTag, "")
-            .trimEnd();
-          if (!cleaned && trimmed) droppedToolMarkup = true;
+          const cleaned = cleanBodyLine(line);
+          if (trimmed && !cleaned) droppedToolMarkup = true;
           return cleaned;
         };
         let bodyCarry = "";
@@ -1217,7 +1237,7 @@
           for (;;) {
             const at = bodyCarry.indexOf("\n");
             if (at < 0) break;
-            const line = cleanBodyLine(bodyCarry.slice(0, at));
+            const line = cleanStreamLine(bodyCarry.slice(0, at));
             if (line) out += `${line}\n`;
             bodyCarry = bodyCarry.slice(at + 1);
           }
@@ -1227,7 +1247,7 @@
             let cut = bodyCarry.length - 24;
             const lastOpen = bodyCarry.lastIndexOf("<", cut);
             if (lastOpen >= 0 && lastOpen > bodyCarry.lastIndexOf(">", cut)) cut = lastOpen;
-            const head = cleanBodyLine(bodyCarry.slice(0, cut));
+            const head = cleanStreamLine(bodyCarry.slice(0, cut));
             if (head) out += head;
             bodyCarry = bodyCarry.slice(cut);
           }
@@ -1237,7 +1257,7 @@
           }
         };
         const flushBody = () => {
-          const line = cleanBodyLine(bodyCarry);
+          const line = cleanStreamLine(bodyCarry);
           bodyCarry = "";
           if (line) {
             bodyEmitted = true;
@@ -1319,9 +1339,7 @@
         if (!bodyEmitted) {
           emitChat(requestId, {
             type: "chunk",
-            text: droppedToolMarkup
-              ? "这次模型只回了工具调用指令，没有正文。可以再发一次，或在「我的 → AI 设置」里换个模型。"
-              : "模型这次没有返回内容，再发一次试试。",
+            text: droppedToolMarkup ? toolMarkupFallback : "模型这次没有返回内容，再发一次试试。",
           });
         }
 

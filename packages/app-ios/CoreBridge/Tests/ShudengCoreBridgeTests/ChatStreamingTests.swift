@@ -66,6 +66,29 @@ final class ChatStreamingTests: XCTestCase {
         XCTAssertTrue(body.contains("工具调用指令"), "整段都是标记时应当给读者一句说明：\(body)")
     }
 
+    /// 以前存进历史里的工具调用标记：打开老对话时也要洗干净，不能一打开就是一片「乱码」。
+    func testLoadThreadCleansStoredToolMarkup() throws {
+        let runtime = try makeRuntime()
+        let bar = "\u{FF5C}\u{FF5C}DSML\u{FF5C}\u{FF5C}"
+        let raw = "<\(bar) calls>\\n<\(bar) invoke name=\"getCurrentChapter\">\\n</\(bar) invoke>"
+        let promise = try XCTUnwrap(
+            runtime.evaluate(
+                """
+                (async () => {
+                  const created = JSON.parse(await ShudengApp.createThread({ title: '老对话' }));
+                  await ShudengApp.appendMessage({
+                    threadId: created.id, role: 'assistant', content: '\(raw)',
+                  });
+                  return await ShudengApp.loadThread({ id: created.id });
+                })()
+                """
+            )
+        )
+        let json = try XCTUnwrap(runtime.wait(for: promise, timeout: 30).toString())
+        XCTAssertFalse(json.contains("DSML"), "历史里的工具标记漏出来了：\(json)")
+        XCTAssertTrue(json.contains("工具调用指令"), "整条都是标记时应当给读者一句说明：\(json)")
+    }
+
     /// 选中翻译走的是非流式 chat/completions：端点必须能一次把整段 JSON 读回来。
     func testTranslateReturnsWholeAnswer() throws {
         guard let baseURL = ProcessInfo.processInfo.environment["SHUDENG_MOCK_LLM_URL"], !baseURL.isEmpty else {
