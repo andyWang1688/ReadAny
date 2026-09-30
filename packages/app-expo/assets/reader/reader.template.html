@@ -286,8 +286,9 @@
       const spreadMode = layout === 'single' ? 'none' : 'auto';
       const zoomMode = layout === 'single' ? 'fit-width' : 'fit-page';
 
-      renderer.setAttribute('spread', spreadMode);
-      renderer.setAttribute('zoom', zoomMode);
+      // 设成一样的值也会触发 foliate 重排，PDF 刚恢复到的页码会被顶到别的页。
+      if (renderer.getAttribute('spread') !== spreadMode) renderer.setAttribute('spread', spreadMode);
+      if (renderer.getAttribute('zoom') !== zoomMode) renderer.setAttribute('zoom', zoomMode);
 
       const host = renderer.closest && renderer.closest('foliate-view');
       if (host && host.book && host.book.rendition) {
@@ -306,10 +307,17 @@
       renderer.setAttribute('max-column-count', '1');
       renderer.setAttribute('max-block-size', '1440px');
       renderer.setAttribute('max-inline-size', getMobileReflowMaxInlineSize() + 'px');
+      enableSmoothPageTurn(renderer);
+    }
+
+    // foliate 默认是瞬移换页；加上 animated 才会走库自带的 300ms 位移缓动。
+    function enableSmoothPageTurn(renderer) {
+      if (renderer && !renderer.hasAttribute('animated')) renderer.setAttribute('animated', '');
     }
 
     function applyRendererFlowMode(renderer) {
       if (!renderer || !view) return;
+      // 章节加载也会走到这里，别在这里停惯性（惯性每帧会自己确认还在滚动模式）。
 
       if (view.isFixedLayout) {
         renderer.removeAttribute('no-continuous-scroll');
@@ -320,6 +328,7 @@
         renderer.removeAttribute('no-continuous-scroll');
         renderer.setAttribute('flow', 'scrolled');
         renderer.setAttribute('max-inline-size', '9999px');
+        enableSmoothPageTurn(renderer);
         return;
       }
 
@@ -1291,6 +1300,9 @@
         case 'goToCFI':
           if (view && msg.cfi) await view.goTo(msg.cfi);
           break;
+        case 'goToText':
+          if (view && msg.text) await goToText(msg.text);
+          break;
         case 'search':
           await handleSearch(msg.query);
           break;
@@ -1298,6 +1310,11 @@
           if (view) view.clearSearch();
           searchResults = [];
           searchIndex = 0;
+          break;
+        case 'clearSelection':
+          // 高亮/笔记存好、或者用户点了选中工具栏的叉：宿主把页面上的选中一起收掉，
+          // 否则正文会一直蓝着，看着像高亮没生效。
+          clearDocumentSelection();
           break;
         case 'navigateSearch':
           if (msg.index != null) navigateToSearchResult(msg.index);
@@ -1364,6 +1381,13 @@
           break;
         case 'setThemeColors':
           if (msg.colors) setThemeColors(msg.colors, msg.themeMode);
+          break;
+        case 'setBookmarkPullState':
+          // 宿主（Swift 底栏书签按钮 / 载入已有书签）同步当前页是否已加书签，
+          // 否则下拉手势的文案会一直停在「下滑添加书签」。
+          if (typeof window.setBookmarkPullState === 'function') {
+            window.setBookmarkPullState({ bookmarked: msg.bookmarked === true });
+          }
           break;
         case 'extractChapters':
           await handleExtractChapters();
@@ -1538,7 +1562,9 @@
             applyPdfPageThemeFilter(doc, index);
           }
           attachTapListener(doc);
+          attachFixedLayoutSwipe(doc);
           attachPullBookmarkListener(doc);
+          attachScrollFlingListener(doc);
           attachSelectionListener(doc);
           attachNoteLongPress(doc);
           refreshUserAnnotations(100);
@@ -1576,16 +1602,17 @@
           const rendererPages = view && view.renderer && typeof view.renderer.pages === 'number'
             ? view.renderer.pages
             : null;
-          const actualPage = rendererPage != null && rendererPages != null && rendererPages > 2
+          const actualPage = rendererPage != null && rendererPages != null && rendererPages > 0
             ? {
-                current: Math.max(1, Math.min(rendererPage, rendererPages - 2)),
-                total: Math.max(1, rendererPages - 2),
+                current: Math.max(1, Math.min(rendererPage + 1, rendererPages)),
+                total: rendererPages,
               }
             : null;
           postToRN('relocate', {
             fraction: detail.fraction,
             section: { current: currentSectionIndex, total: relocatedSectionTotal },
             location: detail.location,
+            time: detail.time,
             page: actualPage,
             tocItem: detail.tocItem,
             pageItem: detail.pageItem,
@@ -1737,7 +1764,25 @@
         }
 
         if (el.isFixedLayout) {
-          await el.init({});
+          // 固定版式（PDF）：先定位到上次读到的那一页；没有历史位置才回第一页。
+          // 注意不能走 init({})——foliate 会先 next() 一次，PDF 一打开就落到最后一页。
+          const resumeCfi = typeof msg.lastLocation === 'string'
+            ? msg.lastLocation
+            : (msg.lastLocation?.cfi ?? '');
+          let restored = false;
+          if (resumeCfi) {
+            try {
+              const resolved = el.resolveNavigation(resumeCfi);
+              if (resolved && Number.isInteger(resolved.index)) {
+                await el.renderer.goTo(resolved);
+                el.history.pushState(resumeCfi);
+                restored = true;
+              }
+            } catch (err) {
+              console.warn('[WebView] 固定版式续读失败，回到第一页:', err);
+            }
+          }
+          if (!restored) await el.goToFraction(0);
         } else if (msg.lastLocation) {
           try {
             await el.init({ lastLocation: msg.lastLocation });
@@ -1803,6 +1848,30 @@
       } catch (err) {
         postToRN('error', { message: 'Navigate search failed: ' + String(err) });
       }
+    }
+
+    // 跳到一小段原文：语义检索给的是正文片段，没有 cfi，所以用书内搜索定位。
+    // 片段越长越容易因为换行/空白差异搜不到，所以逐档截短重试。
+    async function goToText(text) {
+      const full = String(text || '').replace(/\s+/g, ' ').trim();
+      if (!view || !full) return false;
+      for (const length of [64, 48, 32, 24, 16]) {
+        const needle = full.slice(0, length).trim();
+        if (needle.length < 6) break;
+        try {
+          for await (const result of view.search({ query: needle })) {
+            if (result === 'done') break;
+            const cfi = result && result.cfi ? result.cfi : result?.subitems?.[0]?.cfi;
+            if (!cfi) continue;
+            view.clearSearch();
+            await view.goTo(cfi);
+            return true;
+          }
+        } catch (err) {
+          postToRN('debug', { message: '[goToText] failed: ' + String(err) });
+        }
+      }
+      return false;
     }
 
     // ─── Settings ───
@@ -2667,6 +2736,62 @@ html, body {
       }, { passive: false, capture: true });
     }
 
+    /// 固定版式（PDF / 漫画）补滑动翻页：foliate 的 FXL 渲染器只认 next()/prev()，不认手势。
+    function attachFixedLayoutSwipe(doc) {
+      if (doc.__readany_fxl_swipe) return;
+      doc.__readany_fxl_swipe = true;
+
+      const MIN_HORIZONTAL = 48;
+      const MAX_OFF_AXIS = 64;
+      const MAX_DURATION = 500;
+      let start = null;
+
+      doc.addEventListener('touchstart', (e) => {
+        if (!view || !view.isFixedLayout || currentViewMode === 'scroll') {
+          start = null;
+          return;
+        }
+        if (bookmarkPullGestureActive || tapNavigationInFlight || doc.__readany_selection_interaction) {
+          start = null;
+          return;
+        }
+        if (e.touches.length !== 1) {
+          start = null;
+          return;
+        }
+        const touch = e.touches[0];
+        start = { x: touch.clientX, y: touch.clientY, at: Date.now() };
+      }, { passive: true });
+
+      doc.addEventListener('touchcancel', () => {
+        start = null;
+      }, { passive: true });
+
+      doc.addEventListener('touchend', (e) => {
+        const state = start;
+        start = null;
+        if (!state || !view || !view.isFixedLayout || currentViewMode === 'scroll') return;
+        if (e.changedTouches.length !== 1) return;
+        if (Date.now() - state.at > MAX_DURATION) return;
+
+        const touch = e.changedTouches[0];
+        const dx = touch.clientX - state.x;
+        const dy = touch.clientY - state.y;
+        if (Math.abs(dx) < MIN_HORIZONTAL) return;
+        if (Math.abs(dy) > MAX_OFF_AXIS || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+
+        const sel = doc.getSelection();
+        if (sel && !sel.isCollapsed && sel.toString().trim().length > 0) return;
+
+        armTapNavigationLock();
+        if (dx < 0) {
+          goNextByMode(undefined, 'swipe:left');
+        } else {
+          goPrevByMode(undefined, 'swipe:right');
+        }
+      }, { passive: true });
+    }
+
     function attachPullBookmarkListener(doc) {
       if (doc.__readany_pullBookmark) return;
       doc.__readany_pullBookmark = true;
@@ -2795,6 +2920,103 @@ html, body {
         } catch (err) { /* no-op */ }
         resetPullBookmarkUI(true);
       }, { passive: true, capture: true });
+    }
+
+    // ─── 连续滚动的惯性 ───
+    // foliate 在滚动模式下自己接管竖向拖动：跟手是 1:1，但松手就停，
+    // 原生滚动又被它的 preventDefault 挡掉了，所以这里补一段指数衰减的惯性。
+    const SCROLL_FLING_MIN_VELOCITY = 0.15; // px/ms，低于这个速度不甩
+    const SCROLL_FLING_TAU = 500; // ms，速度衰减到 1/e 的时间，接近 iOS 0.998/ms 的手感
+    const SCROLL_FLING_STOP_VELOCITY = 0.03; // px/ms，慢到这个程度就收尾
+    const SCROLL_FLING_STALE_MS = 180; // ms，手指停住超过这么久再抬起就不算甩
+    let scrollFlingFrame = 0;
+
+    function stopScrollFling() {
+      if (scrollFlingFrame) cancelAnimationFrame(scrollFlingFrame);
+      scrollFlingFrame = 0;
+    }
+
+    // 竖排书用的是 scrollLeft，方向容易搞反，先不给它做惯性。
+    function getScrollFlingContainer() {
+      if (!view || !view.renderer || !view.renderer.scrolled) return null;
+      if (view.renderer.scrollProp !== 'scrollTop') return null;
+      for (const content of getRendererContents()) {
+        const doc = content && content.doc;
+        const iframe = doc && doc.defaultView && doc.defaultView.frameElement;
+        const root = iframe && iframe.getRootNode ? iframe.getRootNode() : null;
+        const container = root && root.getElementById ? root.getElementById('container') : null;
+        if (container) return container;
+      }
+      return null;
+    }
+
+    // 每帧重新取容器：滚动过程中 foliate 会动态挂载/卸载章节，位置要读它当下的值。
+    function startScrollFling(velocity) {
+      if (!Number.isFinite(velocity) || Math.abs(velocity) < SCROLL_FLING_MIN_VELOCITY) return;
+      stopScrollFling();
+      const startedAt = performance.now();
+      let lastAt = startedAt;
+      const step = (now) => {
+        scrollFlingFrame = 0;
+        const container = getScrollFlingContainer();
+        if (!container) return;
+        const dt = Math.min(50, Math.max(1, now - lastAt));
+        lastAt = now;
+        const speed = velocity * Math.exp(-(now - startedAt) / SCROLL_FLING_TAU);
+        if (Math.abs(speed) < SCROLL_FLING_STOP_VELOCITY) return;
+        const before = container.scrollTop;
+        container.scrollTop = before + speed * dt;
+        // 已经到头了就别空转
+        if (Math.abs(container.scrollTop - before) < 0.5) return;
+        scrollFlingFrame = requestAnimationFrame(step);
+      };
+      scrollFlingFrame = requestAnimationFrame(step);
+    }
+
+    function attachScrollFlingListener(doc) {
+      if (doc.__readany_scroll_fling) return;
+      doc.__readany_scroll_fling = true;
+
+      let tracking = false;
+      let lastY = 0;
+      let lastAt = 0;
+      let velocity = 0;
+
+      doc.addEventListener('touchstart', (e) => {
+        stopScrollFling();
+        tracking = e.touches.length === 1 && !!getScrollFlingContainer();
+        velocity = 0;
+        if (!tracking) return;
+        // 用屏幕坐标：正文跟着手指滚，iframe 内的 clientY 几乎不变，算不出速度。
+        lastY = e.touches[0].screenY;
+        lastAt = e.timeStamp;
+      }, { passive: true });
+
+      doc.addEventListener('touchmove', (e) => {
+        if (!tracking || e.touches.length !== 1) return;
+        const y = e.touches[0].screenY;
+        const at = e.timeStamp;
+        const dt = at - lastAt;
+        if (dt > 0) {
+          const instant = (lastY - y) / dt;
+          velocity = velocity * 0.5 + instant * 0.5;
+        }
+        lastY = y;
+        lastAt = at;
+      }, { passive: true });
+
+      doc.addEventListener('touchend', (e) => {
+        if (!tracking) return;
+        tracking = false;
+        // 手指停住一会儿再抬起，不该继续甩出去（两个时间戳同源，只能拿事件的时间戳比）
+        const gap = e.timeStamp - lastAt;
+        if (gap > SCROLL_FLING_STALE_MS) velocity = 0;
+        startScrollFling(velocity);
+      }, { passive: true });
+
+      doc.addEventListener('touchcancel', () => {
+        tracking = false;
+      }, { passive: true });
     }
 
     // ─── Selection detection ───
@@ -2960,6 +3182,23 @@ html, body {
       return range && !range.collapsed ? range : null;
     }
 
+    // 收起正文里的选中（分页渲染时选区在 iframe 里，主文档也要一起收）。
+    function clearDocumentSelection() {
+      const docs = [document];
+      document.querySelectorAll('iframe').forEach(function (frame) {
+        const doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
+        if (doc) docs.push(doc);
+      });
+      for (const doc of docs) {
+        try {
+          const selection = doc.getSelection && doc.getSelection();
+          if (selection && !selection.isCollapsed) selection.removeAllRanges();
+        } catch (e) {
+          // 跨域或已经卸载的 iframe：忽略
+        }
+      }
+    }
+
     function getRangeTextWithoutRuby(range, fallback) {
       try {
         const fragment = range.cloneContents();
@@ -3008,10 +3247,11 @@ html, body {
           
           var isVisible = false;
           if (isPaginated && pSize > 0) {
-            // In paginated mode, first page starts at scroll offset = pSize
-            // So visible range in iframe coords is [start - size, end - size]
-            var visibleLeft = pStart - pSize;
-            var visibleRight = pStart;
+            // 同 doGetVisibleText：当前页的可见区间就是 [renderer.start, renderer.end]。
+            var visibleLeft = pStart;
+            var visibleRight = (typeof renderer.end === 'number' && renderer.end > pStart)
+              ? renderer.end
+              : pStart + pSize;
             isVisible = rect.right > visibleLeft && rect.left < visibleRight && rect.width > 0;
           } else {
             // Scrolled mode: use iframe viewport dimensions
@@ -3040,11 +3280,14 @@ html, body {
           return { text: '', error: 'no view or renderer' };
         }
         var renderer = view.renderer;
-        var contents = renderer.getContents && renderer.getContents();
-        if (!contents || !contents[0] || !contents[0].doc) {
+        // 分页模式下 renderer.getContents() 会返回好几个已加载的 section（封面、目录…），
+        // 只有 primaryIndex 那一个是当前正在读的：以前固定取 contents[0]，
+        // 正文永远是空的（TTS / AI 上下文 / 阅读字数统计全挂）。
+        var content = getPrimaryRendererContent();
+        if (!content || !content.doc) {
           return { text: '', error: 'no contents or doc' };
         }
-        var doc = contents[0].doc;
+        var doc = content.doc;
         var win = doc.defaultView;
         if (!win) {
           return { text: '', error: 'no win' };
@@ -3082,12 +3325,12 @@ html, body {
           
           var isVisible = false;
           if (isPaginated && pSize > 0) {
-            // In paginated mode, the iframe is expanded to the full content width.
-            // The outer container scrolls to show the current "page".
-            // First page starts at scroll offset = pSize (page 0 is padding).
-            // So visible range in iframe coords is [start - size, end - size].
-            var visibleLeft = pStart - pSize;
-            var visibleRight = pStart;
+            // renderer.start / renderer.end 已经是当前页在 iframe 坐标系里的可见区间。
+            // 用 [start, end] 判定：翻页后 start 落在上一页的末尾，第一页 start = 0。
+            var visibleLeft = pStart;
+            var visibleRight = (typeof renderer.end === 'number' && renderer.end > pStart)
+              ? renderer.end
+              : pStart + pSize;
             isVisible = rect.right > visibleLeft && rect.left < visibleRight && rect.width > 0;
           } else {
             // Scrolled mode: use iframe viewport dimensions
@@ -4108,8 +4351,6 @@ html, body {
     window.setPaginatedLayout = function (m) { applySettings({ paginatedLayout: m }); };
     window.addAnnotation = function (a) { if (view) view.addAnnotation(a); };
     window.removeAnnotation = function (a) { if (view) view.deleteAnnotation(a); };
-    window.setTTSHighlight = function (cfi, color) { return setTTSHighlight(cfi, color); };
-    window.clearTTSHighlight = function () { return clearTTSHighlight(); };
     
     // Flash highlight for AI citation - temporarily hide existing annotation, show flash, then restore
     window.flashHighlight = async function(cfi, color, duration) {
