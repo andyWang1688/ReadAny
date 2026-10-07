@@ -6,10 +6,11 @@ struct ChatView: View {
     @EnvironmentObject private var reading: ReadingSession
     @EnvironmentObject private var settings: AISettings
     @EnvironmentObject private var chat: ChatService
+    @StateObject private var library = LibraryStore()
 
     @State private var draft = ""
     @State private var showSettings = false
-    @State private var showThreads = false
+    @State private var showBookPicker = false
     @State private var skills: [AISkill] = []
     /// 点了「需要输入」的技能后，先挂在这里，等用户在输入框里补上对象再发。
     @State private var pendingSkill: AISkill?
@@ -29,17 +30,7 @@ struct ChatView: View {
         .navigationTitle(chat.activeThreadTitle ?? "AI")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                if let book = reading.book {
-                    Text(book.title)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("会话", systemImage: "bubble.left.and.bubble.right") { showThreads = true }
-                    .accessibilityIdentifier("chat.threads")
                 skillMenu
                 Menu {
                     Button("清空对话", systemImage: "trash") { chat.clear() }
@@ -56,14 +47,23 @@ struct ChatView: View {
         .sheet(isPresented: $showSettings) {
             AISettingsView().environmentObject(settings)
         }
-        .sheet(isPresented: $showThreads) { threadList }
+        .sheet(isPresented: $showBookPicker) {
+            BookPickerSheet(
+                books: library.books,
+                selectedBookId: chat.activeBookId
+            ) { bookId in
+                chat.setBook(bookId, using: runtime)
+            }
+        }
         .sheet(isPresented: $showMindMap) { MindMapSheet() }
         .task {
             chat.attach(to: runtime)
+            library.refresh(using: runtime)
             loadSkills()
         }
         .onChange(of: runtime.state) { _, _ in
             chat.attach(to: runtime)
+            library.refresh(using: runtime)
             loadSkills()
         }
     }
@@ -129,63 +129,6 @@ struct ChatSheet: View {
         .accessibilityIdentifier("chat.skills")
     }
 
-    private var threadList: some View {
-        NavigationStack {
-            List {
-                Button {
-                    chat.startNewThread()
-                    showThreads = false
-                } label: {
-                    Label("新对话", systemImage: "square.and.pencil")
-                }
-                .accessibilityIdentifier("chat.newThread")
-
-                ForEach(chat.threads) { thread in
-                    Button {
-                        chat.open(thread, using: runtime)
-                        showThreads = false
-                    } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(thread.title)
-                                .font(.subheadline.weight(chat.activeThreadId == thread.id ? .semibold : .regular))
-                                .foregroundStyle(Color.primary)
-                                .lineLimit(1)
-                            Text(threadSubtitle(thread))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("chat.threadRow")
-                }
-                .onDelete { offsets in
-                    for index in offsets {
-                        chat.delete(chat.threads[index], using: runtime)
-                    }
-                }
-            }
-            .navigationTitle("会话")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { showThreads = false }
-                }
-            }
-            .task { chat.refreshThreads(using: runtime) }
-        }
-    }
-
-    private func threadSubtitle(_ thread: ChatThread) -> String {
-        let date = Date(timeIntervalSince1970: thread.updatedAt / 1000)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "M-d HH:mm"
-        let stamp = formatter.string(from: date)
-        guard let last = thread.lastMessage, !last.isEmpty else { return stamp }
-        return "\(stamp) · \(last)"
-    }
-
     private var transcript: some View {
         ScrollViewReader { proxy in
             ScrollView {
@@ -221,6 +164,7 @@ struct ChatSheet: View {
         }
     }
 
+    /// 新对话就是一张白纸：上下文由输入框上方的 chip 交代，这里只说必须说的事。
     private var hint: some View {
         VStack(alignment: .leading, spacing: 10) {
             if runtime.state != .ready {
@@ -232,64 +176,11 @@ struct ChatSheet: View {
                     .foregroundStyle(.secondary)
                 Button("去设置") { showSettings = true }
                     .buttonStyle(.borderedProminent)
-            } else if let book = reading.book {
-                Text("和《\(book.title)》对话")
-                    .font(.title3.weight(.semibold))
-                Text("提问会自动带上阅读位置和当前页正文；选中文字后提问，优先带选中的段落。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                suggestions
-            } else {
-                Text("从一本书开始")
-                    .font(.title3.weight(.semibold))
-                Text("在书库打开一本书，再回来提问。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 4)
     }
-
-    /// 空对话时给几个能直接点的开头，比一句「请输入问题」有用。
-    private var suggestions: some View {
-        VStack(spacing: 0) {
-            ForEach(Self.starterPrompts, id: \.self) { prompt in
-                Button {
-                    draft = prompt
-                } label: {
-                    HStack(spacing: 10) {
-                        Text(prompt)
-                            .font(.subheadline)
-                            .foregroundStyle(Color.primary)
-                        Spacer(minLength: 0)
-                        Image(systemName: "arrow.up.left")
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(.vertical, 12)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier("chat.suggestion")
-                if prompt != Self.starterPrompts.last {
-                    Divider()
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
-        )
-        .padding(.top, 8)
-    }
-
-    private static let starterPrompts = [
-        "这一章讲了什么？",
-        "这本书的核心观点是什么？",
-        "把当前这一页讲得再简单一点",
-    ]
 
     private var composer: some View {
         VStack(spacing: 8) {
@@ -332,8 +223,9 @@ struct ChatSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("chat.skillChip")
             }
+            bookChip
             HStack(alignment: .bottom, spacing: 8) {
-                TextField(pendingSkill?.needsInput ?? "问这本书…", text: $draft, axis: .vertical)
+                TextField(pendingSkill?.needsInput ?? (activeBook == nil ? "随便问点什么…" : "问这本书…"), text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
                     .padding(.horizontal, 12)
@@ -358,8 +250,8 @@ struct ChatSheet: View {
                         draft = ""
                         chat.send(
                             text,
-                            book: reading.book,
-                            contextText: reading.promptContext,
+                            book: activeBook,
+                            contextText: contextForSend,
                             settings: settings,
                             skill: pendingSkill
                         )
@@ -382,6 +274,42 @@ struct ChatSheet: View {
 
     private var canSend: Bool {
         !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// 这段对话挂在哪本书上；没挂书就是「临时对话」。
+    private var activeBook: LibraryStore.Book? {
+        guard let id = chat.activeBookId else { return nil }
+        return library.books.first { $0.id == id }
+    }
+
+    /// 只有绑定的就是正在翻的这本书，才把当前页正文和选中的原文带上。
+    private var contextForSend: String? {
+        guard let activeBook, activeBook.id == reading.book?.id else { return nil }
+        return reading.promptContext
+    }
+
+    /// 输入框上方的上下文 chip：点开换书，或者退回临时对话。
+    private var bookChip: some View {
+        Button {
+            showBookPicker = true
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: activeBook == nil ? "bubble.left" : "book")
+                    .font(.caption2)
+                Text(activeBook?.title ?? "临时对话")
+                    .font(.caption)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color(.secondarySystemBackground), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("chat.bookChip")
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func errorBanner(_ text: String) -> some View {

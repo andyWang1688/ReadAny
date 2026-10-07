@@ -1,18 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import SwiftUI
 
-/// AI 栏首屏＝对话历史。
-/// 读书时问 AI 的入口是「选中一句话 → ✨」，很少有人先点开 AI 栏再想问题，
-/// 所以这一屏的正事是翻旧账：我问过什么、结论是什么、这段对话是哪本书里的。
+/// AI 栏首屏＝全部对话历史。
+/// 分组键是书（书的角色等于 Codex 里的「项目」）；不指定书的「临时对话」永远钉在最下。
+/// 组按书名排，顶栏可以切正序 / 倒序，不跟着最近活动跳来跳去。
 struct ChatListView: View {
     @EnvironmentObject private var runtime: RuntimeHost
-    @EnvironmentObject private var reading: ReadingSession
     @EnvironmentObject private var chat: ChatService
     @StateObject private var library = LibraryStore()
 
     @State private var openThread: ChatThread?
     @State private var startNewConversation = false
     @State private var searchText = ""
+    @State private var showSearch = false
+    /// 收起来的组（默认全展开）。
+    @State private var collapsedGroups: Set<String> = []
+    @State private var renaming: ChatThread?
+    @State private var renameText = ""
+    @State private var moving: ChatThread?
+    @AppStorage("shudeng.chat.groupSortDescending") private var sortDescending = false
+
+    private struct ThreadGroup: Identifiable {
+        let id: String
+        let title: String
+        let bookId: String?
+        let threads: [ChatThread]
+
+        var isGeneral: Bool { bookId == nil }
+    }
 
     var body: some View {
         NavigationStack {
@@ -24,18 +39,27 @@ struct ChatListView: View {
                 }
             }
             .background(Color(.systemBackground))
-            .searchable(text: $searchText, prompt: "搜索书名或对话")
+            .navigationBarTitleDisplayMode(.inline)
+            .searchable(
+                text: $searchText,
+                isPresented: $showSearch,
+                placement: .navigationBarDrawer(displayMode: .always),
+                prompt: "搜索对话"
+            )
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        chat.startNewThread()
-                        startNewConversation = true
-                    } label: {
-                        Image(systemName: "square.and.pencil")
+                if !chat.threads.isEmpty {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            showSearch.toggle()
+                        } label: {
+                            Image(systemName: "magnifyingglass")
+                        }
+                        .accessibilityIdentifier("chat.search")
+                        .accessibilityLabel("搜索对话")
                     }
-                    .accessibilityIdentifier("chat.newThread")
-                    .accessibilityLabel("新对话")
+                    ToolbarItem(placement: .topBarTrailing) { sortMenu }
                 }
+                ToolbarItem(placement: .topBarTrailing) { newThreadButton }
             }
             .navigationDestination(item: $openThread) { thread in
                 ChatView()
@@ -43,6 +67,24 @@ struct ChatListView: View {
             }
             .navigationDestination(isPresented: $startNewConversation) {
                 ChatView()
+            }
+            .alert("重命名对话", isPresented: renamePresented) {
+                TextField("对话名称", text: $renameText)
+                Button("取消", role: .cancel) { renaming = nil }
+                Button("保存") {
+                    if let thread = renaming {
+                        chat.rename(thread, to: renameText, using: runtime)
+                    }
+                    renaming = nil
+                }
+            }
+            .sheet(item: $moving) { thread in
+                BookPickerSheet(
+                    books: library.books,
+                    selectedBookId: thread.bookId
+                ) { bookId in
+                    chat.move(thread, to: bookId, using: runtime)
+                }
             }
             .task {
                 chat.refreshThreads(using: runtime)
@@ -60,10 +102,41 @@ struct ChatListView: View {
         }
     }
 
+    private var newThreadButton: some View {
+        Button {
+            chat.startNewThread()
+            startNewConversation = true
+        } label: {
+            Image(systemName: "plus")
+        }
+        .accessibilityIdentifier("chat.newThread")
+        .accessibilityLabel("新对话")
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker("排序", selection: $sortDescending) {
+                Text("名称 A → Z").tag(false)
+                Text("名称 Z → A").tag(true)
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+        }
+        .accessibilityIdentifier("chat.sort")
+        .accessibilityLabel("分组排序")
+    }
+
+    private var renamePresented: Binding<Bool> {
+        Binding(
+            get: { renaming != nil },
+            set: { if !$0 { renaming = nil } }
+        )
+    }
+
     private var list: some View {
         List {
-            ForEach(bookGroups, id: \.id) { group in
-                Section {
+            ForEach(groups) { group in
+                Section(isExpanded: expandedBinding(group.id)) {
                     ForEach(group.threads) { thread in
                         Button {
                             chat.open(thread, using: runtime)
@@ -73,22 +146,49 @@ struct ChatListView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("chat.threadRow")
-                    }
-                    .onDelete { offsets in
-                        for index in offsets {
-                            chat.delete(group.threads[index], using: runtime)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            Button(role: .destructive) {
+                                chat.delete(thread, using: runtime)
+                            } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                            Button {
+                                renameText = thread.title
+                                renaming = thread
+                            } label: {
+                                Label("重命名", systemImage: "pencil")
+                            }
+                            .tint(.gray)
+                        }
+                        .contextMenu {
+                            Button {
+                                moving = thread
+                            } label: {
+                                Label("移到某本书", systemImage: "book")
+                            }
+                            Button {
+                                renameText = thread.title
+                                renaming = thread
+                            } label: {
+                                Label("重命名", systemImage: "pencil")
+                            }
+                            Button(role: .destructive) {
+                                chat.delete(thread, using: runtime)
+                            } label: {
+                                Label("删除", systemImage: "trash")
+                            }
                         }
                     }
                 } header: {
                     HStack(spacing: 8) {
-                        Image(systemName: group.bookId == nil ? "bubble.left.and.bubble.right" : "book.closed")
+                        Image(systemName: group.isGeneral ? "bubble.left" : "book")
                             .font(.caption.weight(.semibold))
-                        Text("\(group.title) · \(group.threads.count) 段对话")
+                        Text(group.title)
                     }
                     .foregroundStyle(.secondary)
                 }
             }
-            if bookGroups.isEmpty {
+            if groups.isEmpty {
                 Text("没有找到匹配的对话")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -100,7 +200,17 @@ struct ChatListView: View {
         .refreshable { chat.refreshThreads(using: runtime) }
     }
 
-    private var bookGroups: [(id: String, title: String, bookId: String?, threads: [ChatThread])] {
+    private func expandedBinding(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { !collapsedGroups.contains(id) },
+            set: { isOpen in
+                if isOpen { collapsedGroups.remove(id) } else { collapsedGroups.insert(id) }
+            }
+        )
+    }
+
+    /// 先生成组，再排序：书按书名（可正可倒），「临时对话」永远排最后。
+    private var groups: [ThreadGroup] {
         let booksByID = Dictionary(uniqueKeysWithValues: library.books.map { ($0.id, $0.title) })
         let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let source = chat.threads.filter { thread in
@@ -110,28 +220,23 @@ struct ChatListView: View {
                 || (thread.lastMessage ?? "").lowercased().contains(keyword)
                 || bookTitle.lowercased().contains(keyword)
         }
-        let grouped = Dictionary(grouping: source) { $0.bookId ?? "__general__" }
-        return grouped.map { key, threads in
+        var result = Dictionary(grouping: source) { $0.bookId ?? "" }.map { key, threads -> ThreadGroup in
             let sorted = threads.sorted { $0.updatedAt > $1.updatedAt }
-            let title: String
-            let bookId: String?
-            if key == "__general__" {
-                title = "未归类对话"
-                bookId = nil
-            } else {
-                title = booksByID[key] ?? "已删除的书"
-                bookId = key
+            guard !key.isEmpty else {
+                return ThreadGroup(id: key, title: "临时对话", bookId: nil, threads: sorted)
             }
-            return (id: key, title: title, bookId: bookId, threads: sorted)
+            return ThreadGroup(id: key, title: booksByID[key] ?? "已删除的书", bookId: key, threads: sorted)
         }
-        .sorted { left, right in
-            (left.threads.first?.updatedAt ?? 0) > (right.threads.first?.updatedAt ?? 0)
+        result.sort { left, right in
+            if left.isGeneral != right.isGeneral { return right.isGeneral }
+            let order = left.title.localizedStandardCompare(right.title)
+            return sortDescending ? order == .orderedDescending : order == .orderedAscending
         }
+        return result
     }
 
     private func row(_ thread: ChatThread) -> some View {
-        HStack(spacing: 12) {
-            thumb(for: thread)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(thread.title)
                     .font(.subheadline)
@@ -143,10 +248,6 @@ struct ChatListView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                Text(meta(thread))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
             }
             Spacer(minLength: 8)
             Text(stamp(thread))
@@ -155,42 +256,6 @@ struct ChatListView: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
-    }
-
-    /// 左图：认得出是哪本书就写书名头两个字，认不出就放一个对话图标。
-    @ViewBuilder
-    private func thumb(for thread: ChatThread) -> some View {
-        let title = library.books.first { $0.id == thread.bookId }?.title
-        RoundedRectangle(cornerRadius: 5, style: .continuous)
-            .fill(Color(.secondarySystemBackground))
-            .frame(width: 34, height: 46)
-            .overlay {
-                if let title {
-                    Text(String(title.prefix(2)))
-                        .font(.system(size: 11, weight: .medium, design: .serif))
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                } else {
-                    Image(systemName: "text.bubble")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-            .overlay(
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .strokeBorder(Theme.coverBorder, lineWidth: 0.5)
-            )
-    }
-
-    private func meta(_ thread: ChatThread) -> String {
-        var parts: [String] = []
-        if let bookId = thread.bookId, let book = library.books.first(where: { $0.id == bookId }) {
-            parts.append(book.title)
-        }
-        if let count = thread.messageCount, count > 0 {
-            parts.append("\(Int(count)) 条")
-        }
-        return parts.joined(separator: " · ")
     }
 
     private func stamp(_ thread: ChatThread) -> String {
@@ -208,39 +273,9 @@ struct ChatListView: View {
     }
 
     private var empty: some View {
-        VStack {
-            Spacer(minLength: 0)
-            VStack(spacing: 8) {
-                Text("还没有对话")
-                    .font(.headline)
-                Text("读书时选中一句话，点 ✨ 直接问；也可以点右上角，带着正在读的书开一段新的。")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                if let book = reading.book {
-                    Button("带着《\(book.title)》开一段") {
-                        chat.startNewThread()
-                        startNewConversation = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .padding(.top, 10)
-                    .accessibilityIdentifier("chat.emptyStart")
-                } else if !library.books.isEmpty {
-                    Button("开一段新对话") {
-                        chat.startNewThread()
-                        startNewConversation = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .padding(.top, 10)
-                    .accessibilityIdentifier("chat.emptyStart")
-                }
-            }
-            .padding(.horizontal, 44)
-            Spacer(minLength: 0)
-            Spacer(minLength: 0)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Text("点右上角 ＋ 和 AI 聊聊")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

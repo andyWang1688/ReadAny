@@ -53,6 +53,8 @@ final class ChatService: ObservableObject {
     @Published private(set) var activeThreadId: String?
     /// 当前这段对话的标题（nav 标题用）。
     @Published private(set) var activeThreadTitle: String?
+    /// 当前这段对话挂在哪本书上；nil ＝ 不指定书的「临时对话」。
+    @Published private(set) var activeBookId: String?
 
     private weak var runtime: RuntimeHost?
     private var requestID: String?
@@ -102,6 +104,7 @@ final class ChatService: ObservableObject {
         loadedInitialThread = true
         activeThreadId = nil
         activeThreadTitle = nil
+        activeBookId = nil
         messages.removeAll()
         persistedReplyID = nil
         error = nil
@@ -129,6 +132,7 @@ final class ChatService: ObservableObject {
         guard let loaded = try? JSONDecoder().decode(Loaded.self, from: Data(json.utf8)) else { return }
         activeThreadId = loaded.id
         activeThreadTitle = thread.title
+        activeBookId = thread.bookId
         messages = loaded.messages.map {
             Message(id: $0.id, role: $0.role == "assistant" ? .assistant : .user, text: $0.content)
         }
@@ -145,6 +149,62 @@ final class ChatService: ObservableObject {
         )
         if activeThreadId == thread.id { startNewThread() }
         refreshThreads(using: runtime)
+    }
+
+    /// 改会话标题。当前正打开的就是这段时，导航栏标题一起跟着变。
+    func rename(_ thread: ChatThread, to title: String, using runtime: RuntimeHost) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, runtime.state == .ready else { return }
+        _ = runtime.appJSONOr(
+            "ShudengApp.renameThread(\(Self.payload(["id": thread.id, "title": trimmed])))",
+            fallback: "{}",
+            timeout: 30
+        )
+        if activeThreadId == thread.id { activeThreadTitle = String(trimmed.prefix(40)) }
+        refreshThreads(using: runtime)
+    }
+
+    /// 给「当前这段对话」换书（nil ＝ 挪回临时对话）。
+    /// 对话还没建出来（一个字都没发过）时先记在内存里，第一条消息发出时随 createThread 一起落库。
+    func setBook(_ bookId: String?, using runtime: RuntimeHost) {
+        activeBookId = bookId
+        guard let threadId = activeThreadId, runtime.state == .ready else { return }
+        var body: [String: Any] = ["id": threadId]
+        body["bookId"] = bookId ?? NSNull()
+        _ = runtime.appJSONOr(
+            "ShudengApp.setThreadBook(\(Self.payload(body)))",
+            fallback: "{}",
+            timeout: 30
+        )
+        refreshThreads(using: runtime)
+    }
+
+    /// 把历史里的某段对话挪到另一本书（nil ＝ 挪回「临时对话」）。
+    func move(_ thread: ChatThread, to bookId: String?, using runtime: RuntimeHost) {
+        guard runtime.state == .ready else { return }
+        var body: [String: Any] = ["id": thread.id]
+        body["bookId"] = bookId ?? NSNull()
+        _ = runtime.appJSONOr(
+            "ShudengApp.setThreadBook(\(Self.payload(body)))",
+            fallback: "{}",
+            timeout: 30
+        )
+        if activeThreadId == thread.id { activeBookId = bookId }
+        refreshThreads(using: runtime)
+    }
+
+    /// 阅读器里点 ✨ 进对话：当前这段要不是这本书的，就另开一段，别把别的书的问题混进来。
+    func prepareForReading(_ book: LibraryStore.Book?) {
+        guard let book else { return }
+        if activeBookId == book.id { return }
+        startNewThread()
+        activeBookId = book.id
+    }
+
+    /// 阅读器里选中文字提问：每次都是一段挂在当前书上的新对话。
+    func prepareForSelection(_ book: LibraryStore.Book?) {
+        startNewThread()
+        activeBookId = book?.id
     }
 
     // MARK: - 对话
@@ -261,8 +321,10 @@ final class ChatService: ObservableObject {
         using runtime: RuntimeHost
     ) -> Bool {
         guard activeThreadId == nil else { return true }
+        // 阅读器里提问时 chip 可能还没挂上书，用调用方带上来的那本兜底。
+        if let book, activeBookId == nil { activeBookId = book.id }
         var body: [String: Any] = ["title": String(firstMessage.prefix(24))]
-        if let book { body["bookId"] = book.id }
+        if let activeBookId { body["bookId"] = activeBookId }
         struct Created: Decodable { let id: String }
         let json = runtime.appJSONOr(
             "ShudengApp.createThread(\(Self.payload(body)))",

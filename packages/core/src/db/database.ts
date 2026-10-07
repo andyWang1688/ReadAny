@@ -81,6 +81,7 @@ export {
   getThread,
   insertThread,
   updateThreadTitle,
+  updateThreadBook,
   updateThreadMemory,
   deleteThread,
   deleteThreadsByBookId,

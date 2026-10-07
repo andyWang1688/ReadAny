@@ -89,6 +89,34 @@ final class ChatStreamingTests: XCTestCase {
         XCTAssertTrue(json.contains("工具调用指令"), "整条都是标记时应当给读者一句说明：\(json)")
     }
 
+    /// 会话挂在哪本书上、标题叫什么，都要能改：AI 栏按书分组和「移到某本书」全靠这两个接口。
+    func testRenameThreadAndMoveThreadToBook() throws {
+        let runtime = try makeRuntime()
+        let promise = try XCTUnwrap(
+            runtime.evaluate(
+                """
+                (async () => {
+                  const created = JSON.parse(await ShudengApp.createThread({ title: '新对话' }));
+                  await ShudengApp.renameThread({ id: created.id, title: '换个名字' });
+                  await ShudengApp.setThreadBook({ id: created.id, bookId: 'book-9' });
+                  const inBook = JSON.parse(await ShudengApp.listThreads({ bookId: 'book-9' }));
+                  await ShudengApp.setThreadBook({ id: created.id, bookId: null });
+                  const all = JSON.parse(await ShudengApp.listThreads({}));
+                  const mine = all.find((thread) => thread.id === created.id) || {};
+                  return JSON.stringify({
+                    title: mine.title, bookId: mine.bookId, grouped: inBook.length,
+                  });
+                })()
+                """
+            )
+        )
+        let json = try XCTUnwrap(runtime.wait(for: promise, timeout: 30).toString())
+        let root = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any]
+        XCTAssertEqual(root?["title"] as? String, "换个名字")
+        XCTAssertTrue(root?["bookId"] is NSNull, "挪回临时对话后 bookId 应该是 null：\(json)")
+        XCTAssertEqual(root?["grouped"] as? Int, 1, "按书查会话查不到这一段：\(json)")
+    }
+
     /// 选中翻译走的是非流式 chat/completions：端点必须能一次把整段 JSON 读回来。
     func testTranslateReturnsWholeAnswer() throws {
         guard let baseURL = ProcessInfo.processInfo.environment["SHUDENG_MOCK_LLM_URL"], !baseURL.isEmpty else {

@@ -823,6 +823,27 @@
       return "ok";
     },
 
+    async renameThread(input) {
+      const payload = typeof input === "string" ? JSON.parse(input) : input || {};
+      await bootstrap();
+      const title = String(payload.title || "").trim().slice(0, 40);
+      if (!payload.id || !title) return toJSON({ ok: false });
+      await core.db.updateThreadTitle(String(payload.id), title);
+      return toJSON({ ok: true, title });
+    },
+
+    /// 把一段对话挂到另一本书（bookId 传 null ＝ 挪回「临时对话」）。
+    async setThreadBook(input) {
+      const payload = typeof input === "string" ? JSON.parse(input) : input || {};
+      await bootstrap();
+      if (!payload.id) return toJSON({ ok: false });
+      await core.db.updateThreadBook(
+        String(payload.id),
+        payload.bookId ? String(payload.bookId) : null,
+      );
+      return toJSON({ ok: true });
+    },
+
     /// 端侧向量模型信息（设置页显示用）。
     async embeddingInfo() {
       let diagnostics = "";

@@ -26,6 +26,7 @@ const {
   getThread,
   insertThread,
   updateThreadTitle,
+  updateThreadBook,
   updateThreadMemory,
   deleteThread,
   deleteThreadsByBookId,
@@ -191,6 +192,30 @@ describe("thread-queries", () => {
       expect(sql).toContain("UPDATE threads SET title = ?");
       expect(params[0]).toBe("Updated Title");
       expect(params[4]).toBe("thread-1"); // WHERE id = ?
+    });
+  });
+
+  describe("updateThreadBook", () => {
+    it("moves a thread onto another book with sync tracking", async () => {
+      mockExecute.mockResolvedValue(undefined);
+
+      await updateThreadBook("thread-1", "book-2");
+      expect(mockExecute).toHaveBeenCalledTimes(1);
+      expect(coreMocks.nextUpdatedAt).toHaveBeenCalledWith(mockDb, "threads", "thread-1");
+
+      const [sql, params] = mockExecute.mock.calls[0];
+      expect(sql).toContain("UPDATE threads SET book_id = ?");
+      expect(params[0]).toBe("book-2");
+      expect(params[4]).toBe("thread-1"); // WHERE id = ?
+    });
+
+    it("clears the book when moving back to 临时对话", async () => {
+      mockExecute.mockReset();
+      mockExecute.mockResolvedValue(undefined);
+
+      await updateThreadBook("thread-1", null);
+      const [, params] = mockExecute.mock.calls[0];
+      expect(params[0]).toBeNull();
     });
   });
 

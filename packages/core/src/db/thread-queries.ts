@@ -117,6 +117,17 @@ export async function updateThreadTitle(id: string, title: string): Promise<void
   );
 }
 
+export async function updateThreadBook(id: string, bookId: string | null): Promise<void> {
+  const database = await getDB();
+  const deviceId = await getDeviceId();
+  const syncVersion = await nextSyncVersion(database, "threads");
+  const updatedAt = await nextUpdatedAt(database, "threads", id);
+  await database.execute(
+    "UPDATE threads SET book_id = ?, updated_at = ?, sync_version = ?, last_modified_by = ? WHERE id = ?",
+    [bookId, updatedAt, syncVersion, deviceId, id],
+  );
+}
+
 export async function deleteThread(id: string): Promise<void> {
   const database = await getDB();
   // Get all message IDs in this thread for tombstones

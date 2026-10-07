@@ -46,6 +46,7 @@ struct ReaderScreen: View {
     @EnvironmentObject private var reading: ReadingSession
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var aiSettings: AISettings
+    @EnvironmentObject private var chat: ChatService
     @Environment(\.scenePhase) private var scenePhase
 
     @StateObject private var controller = ReaderController()
@@ -234,7 +235,10 @@ struct ReaderScreen: View {
                 .accessibilityValue(tts.isSpeaking ? "speaking" : "idle")
                 // 正文还没取回来之前先别让点：否则只会弹「没有可朗读的正文」。
                 .disabled(reading.visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !tts.isSpeaking)
-            iconButton("sparkles", id: "reader.chat") { showChat = true }
+            iconButton("sparkles", id: "reader.chat") {
+                chat.prepareForReading(reading.book)
+                showChat = true
+            }
             iconButton("slider.horizontal.3", id: "reader.settings") { showSettings = true }
         }
         .font(.body)
@@ -341,6 +345,8 @@ struct ReaderScreen: View {
                     Image(systemName: "square.and.arrow.up")
                 }
                 Button {
+                    // 选中一段再问 ＝ 这本书的一段新对话，不接在旧对话后面。
+                    chat.prepareForSelection(reading.book)
                     showChat = true
                 } label: {
                     Image(systemName: "sparkles")
