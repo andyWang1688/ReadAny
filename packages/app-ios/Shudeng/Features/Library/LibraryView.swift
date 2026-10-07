@@ -68,17 +68,6 @@ struct LibraryView: View {
                 .accessibilityIdentifier("library.refresh")
                 .disabled(runtime.state != .ready)
             }
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button {
-                        searchFocused = false
-                    } label: {
-                        Label("收起键盘", systemImage: "keyboard.chevron.compact.down")
-                    }
-                    .accessibilityIdentifier("library.hideKeyboard")
-                }
-            }
             .fileImporter(
                 isPresented: $showImporter,
                 allowedContentTypes: [.epub, .pdf],

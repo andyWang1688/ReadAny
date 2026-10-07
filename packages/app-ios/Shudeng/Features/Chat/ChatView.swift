@@ -276,17 +276,6 @@ struct ChatSheet: View {
         .padding(.top, 8)
         .padding(.bottom, 10)
         .background(.bar)
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button {
-                    inputFocused = false
-                } label: {
-                    Label("收起键盘", systemImage: "keyboard.chevron.compact.down")
-                }
-                .accessibilityIdentifier("chat.hideKeyboard")
-            }
-        }
     }
 
     private var canSend: Bool {

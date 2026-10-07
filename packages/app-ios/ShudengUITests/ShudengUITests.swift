@@ -176,13 +176,16 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(importButton.isEnabled, "运行时还没准备好，导入按钮被禁用")
         snap("01-library")
 
-        // 搜索框的键盘也要能自己收回去。
+        // 搜索框的键盘靠点空白处收起（不额外加「收起键盘」按钮）。
         let search = app.textFields["搜索书名 / 作者"]
         XCTAssertTrue(search.waitForExistence(timeout: 10), "搜索框没出现")
         search.tap()
         XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5), "点了搜索框键盘没起来")
-        app.buttons["library.hideKeyboard"].tap()
-        XCTAssertTrue(app.keyboards.element.waitForNonExistence(timeout: 5), "点了「收起键盘」键盘还在")
+        // 搜索框和筛选行之间那条空白，点上以后键盘要自己收回去。
+        let blank = app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: search.frame.midX, dy: search.frame.maxY + 22))
+        blank.tap()
+        XCTAssertTrue(app.keyboards.element.waitForNonExistence(timeout: 5), "点空白处没收起键盘")
     }
 
     func test02ReaderTurnPageAndToggleBookmark() throws {
@@ -236,15 +239,8 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(send.isEnabled, "有内容时发送键应该可用")
         snap("03-chat-input")
 
-        // 键盘要能收回去：键盘上的「收起键盘」和点正文两条路都得行。
+        // 键盘靠点正文收起，不再往键盘上塞单独的「收起键盘」按钮。
         XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5), "点了输入框键盘没起来")
-        let hideKeyboard = app.buttons["chat.hideKeyboard"]
-        XCTAssertTrue(hideKeyboard.waitForExistence(timeout: 5), "键盘上没有「收起键盘」")
-        hideKeyboard.tap()
-        XCTAssertTrue(app.keyboards.element.waitForNonExistence(timeout: 5), "点了「收起键盘」键盘还在")
-
-        input.tap()
-        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5), "再点输入框键盘没起来")
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
         XCTAssertTrue(app.keyboards.element.waitForNonExistence(timeout: 5), "点正文没收起键盘")
     }
