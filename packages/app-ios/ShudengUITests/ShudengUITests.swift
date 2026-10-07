@@ -175,6 +175,14 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(importButton.waitForExistence(timeout: 30), "导入按钮没出现")
         XCTAssertTrue(importButton.isEnabled, "运行时还没准备好，导入按钮被禁用")
         snap("01-library")
+
+        // 搜索框的键盘也要能自己收回去。
+        let search = app.textFields["搜索书名 / 作者"]
+        XCTAssertTrue(search.waitForExistence(timeout: 10), "搜索框没出现")
+        search.tap()
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5), "点了搜索框键盘没起来")
+        app.buttons["library.hideKeyboard"].tap()
+        XCTAssertTrue(app.keyboards.element.waitForNonExistence(timeout: 5), "点了「收起键盘」键盘还在")
     }
 
     func test02ReaderTurnPageAndToggleBookmark() throws {

@@ -7,6 +7,8 @@ struct LibraryView: View {
     @EnvironmentObject private var reading: ReadingSession
     @StateObject private var store = LibraryStore()
     @State private var showImporter = false
+    /// 搜索框焦点：键盘上的「收起键盘」和点空白处都要能把它放掉。
+    @FocusState private var searchFocused: Bool
 
     private let columns = [GridItem(.adaptive(minimum: 104), spacing: 20)]
 
@@ -48,6 +50,7 @@ struct LibraryView: View {
                 .padding(.bottom, 28)
             }
             .scrollDismissesKeyboard(.immediately)
+            .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
             .background(Color(.systemBackground))
             .toolbar {
                 Button {
@@ -64,6 +67,17 @@ struct LibraryView: View {
                 }
                 .accessibilityIdentifier("library.refresh")
                 .disabled(runtime.state != .ready)
+            }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button {
+                        searchFocused = false
+                    } label: {
+                        Label("收起键盘", systemImage: "keyboard.chevron.compact.down")
+                    }
+                    .accessibilityIdentifier("library.hideKeyboard")
+                }
             }
             .fileImporter(
                 isPresented: $showImporter,
@@ -171,6 +185,7 @@ struct LibraryView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             TextField("搜索书名 / 作者", text: $store.query)
+                .focused($searchFocused)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .font(.subheadline)
