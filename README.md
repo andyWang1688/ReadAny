@@ -1,383 +1,115 @@
-<p align="center">
-  <img src="packages/app/public/logo.svg" alt="ReadAny Logo" width="120" height="120">
-</p>
-
-<h1 align="center">ReadAny</h1>
+<h1 align="center">Shudeng · 书灯</h1>
 
 <p align="center">
-  <strong>Local-first AI e-book reader for desktop and mobile</strong>
+  <strong>A local-first AI reading app for iPhone</strong><br>
+  A lamp for your books — it lights up the parts you cannot understand on your own.
 </p>
 
 <p align="center">
-  <em>"Why do I forget what I read? Why are my notes scattered? Why can I only search by keywords?"</em>
-</p>
-
-<p align="center">
-  ReadAny helps you ask questions about books, find ideas by meaning, and build a private reading knowledge base with RAG chat, semantic search, highlights, TTS, and WebDAV sync.
-</p>
-
-<p align="center">
-  <a href="https://github.com/codedogQBY/ReadAny/releases/latest">
-    <img src="https://img.shields.io/github/v/release/codedogQBY/ReadAny?color=blue&label=Download" alt="Release">
-  </a>
-  <a href="https://github.com/codedogQBY/ReadAny/stargazers">
-    <img src="https://img.shields.io/github/stars/codedogQBY/ReadAny?color=yellow" alt="Stars">
-  </a>
-  <a href="https://github.com/codedogQBY/ReadAny/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/codedogQBY/ReadAny?color=green" alt="License">
-  </a>
-  <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20iOS%20%7C%20Android-blue" alt="Platform">
-  <a href="README_CN.md">
-    <img src="https://img.shields.io/badge/lang-中文-red" alt="Chinese">
-  </a>
+  <img alt="Platform" src="https://img.shields.io/badge/iOS-17%2B-blue">
+  <img alt="SwiftUI" src="https://img.shields.io/badge/UI-SwiftUI-black">
+  <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0--or--later-green">
+  <a href="README_CN.md"><img alt="中文" src="https://img.shields.io/badge/lang-中文-red"></a>
 </p>
 
 ---
 
-> 🚀 **v2.0 Update**: Mobile apps (iOS/Android) now available! See [Mobile](#mobile-apps) section below.
+Shudeng puts reading and asking on the same screen. Open an EPUB or PDF, select a passage you do not understand, and ask the AI right there — the answer is grounded in the page you are on. Books, highlights, notes, and conversations all stay on your device.
 
-## AI-Native Reading Workflow
-
-- **Chat with your library** - Ask questions about the current book or selected passages, with answers grounded in your reading context
-- **Find ideas semantically** - Hybrid vector retrieval + BM25 search helps you find concepts even when the exact keyword is missing
-- **Keep knowledge private** - Local embeddings and a local vector store keep your books, highlights, and notes offline-capable
-- **Use your preferred model** - Connect OpenAI, Claude, Gemini, Ollama, DeepSeek, or custom-compatible providers
-
-## Why ReadAny?
-
-| Problem | Traditional Readers | ReadAny |
-|---------|---------------------|---------|
-| Search content | Keywords only | **Semantic search** that understands your intent |
-| Ask questions | Find answers yourself | **AI answers directly + locates sources** |
-| Take notes | Manual copy-paste | **Select to highlight**, one-click export |
-| Knowledge management | Scattered notes | **Unified management**, multi-format export |
-| Privacy | Upload to cloud | **Local vector store**, fully offline capable |
-
-### Comparison with Alternatives
-
-| Feature | ReadAny | Calibre | KOReader | Apple Books |
-|---------|---------|---------|----------|-------------|
-| AI Chat | ✅ | ❌ | ❌ | ❌ |
-| Semantic Search (RAG) | ✅ | ❌ | ❌ | ❌ |
-| Local Vector Store | ✅ | - | - | ❌ |
-| TTS (Text-to-Speech) | ✅ | ❌ | Limited | Limited |
-| Reading Stats | ✅ | ❌ | ❌ | Limited |
-| WebDAV Sync | ✅ | ❌ | ❌ | ❌ |
-| Skills System | ✅ | ❌ | ❌ | ❌ |
-| Format Support | 10+ | 15+ | 10+ | 2 |
-| Note Export | 5 formats | Limited | Limited | Limited |
-| Open Source | ✅ | ✅ | ✅ | ❌ |
-
----
+> Built on top of [ReadAny](https://github.com/codedogQBY/ReadAny) (GPL-3.0-or-later). The desktop and web apps in this repository come from upstream; Shudeng is a native iOS rewrite of the same core, living in `packages/app-ios/`.
 
 ## Screenshots
 
-### Hero
+| Library | Reader |
+| --- | --- |
+| ![Library](assets/ios/library.png) | ![Reader](assets/ios/reader.png) |
 
-<div align="center">
-  <img src="assets/hero-screenshot.png" width="80%" alt="ReadAny Hero">
-</div>
+| AI chat | Notes | Reading stats |
+| --- | --- | --- |
+| ![AI chat](assets/ios/ai-threads.png) | ![Notes](assets/ios/notes.png) | ![Reading stats](assets/ios/stats.png) |
 
-### AI-Powered Chat
+## What it solves
 
-<div align="center">
-  <img src="assets/ai-chat-desktop.png" width="60%" alt="AI Chat - Desktop">
-  <img src="assets/ai-chat-mobile.png" width="20%" alt="AI Chat - Mobile">
-</div>
+| The annoying part of reading | Ordinary readers | Shudeng |
+| --- | --- | --- |
+| You forget what you read and cannot find the passage again | Keyword search only | Semantic search finds the passage by meaning |
+| You hit something you do not understand | Leave the book, look it up, lose your place | Select the text and ask in place, with the current page as context |
+| Notes end up scattered | Written in another app | Highlights, notes, and bookmarks collected per book, exportable |
+| Privacy | Content and notes in the cloud | Books and notes never leave the device; bring your own model |
 
-### Notes & Highlights
+## Features
 
-<div align="center">
-  <img src="assets/notes-desktop.png" width="60%" alt="Notes - Desktop">
-  <img src="assets/notes-mobile.png" width="20%" alt="Notes - Mobile">
-</div>
+**Library** — Import EPUB / PDF from Files or AirDrop, cover grid, search by title or author, semantic search across indexed books, filters (all / reading / unread / finished), sorting, and per-book progress.
 
-### Text-to-Speech
+**Reader** — Paged or continuous scrolling; table of contents, in-book search, bookmarks; white / black / sepia themes; adjustable font size, line height, and margins; a footer that shows chapter progress, book percentage, and time left; the top bar can be hidden for a clean page.
 
-<div align="center">
-  <img src="assets/tts-desktop.png" width="60%" alt="TTS - Desktop">
-  <img src="assets/tts-mobile.png" width="20%" alt="TTS - Mobile">
-</div>
+**AI chat** — History grouped by book, with a separate bucket for chats that are not tied to any book; start a new chat and pick a book with a chip, or just ask freely. Ask about selected text or the current page, watch answers stream in, and expand the thinking process when you want it. Skills cover mind maps and Mermaid diagrams. Providers: OpenAI-compatible, Anthropic, Gemini, or your own endpoint. API keys live in the Keychain.
 
-### Reading Statistics
+**Notes** — Highlights, notes, and bookmarks in one place, grouped by book, searchable, and exportable.
 
-<div align="center">
-  <img src="assets/stats-desktop.png" width="60%" alt="Stats - Desktop">
-  <img src="assets/stats-mobile.png" width="20%" alt="Stats - Mobile">
-</div>
+**Reading stats** — Today / this week / all-time reading time, streaks, a 14-day chart; reports by week, month, or all time with an optional AI summary; badges and a per-book ranking.
 
-### Cross-Device Sync
+**Text to speech** — Reads the text aloud with the system voice, highlights along, and supports a sleep timer.
 
-<div align="center">
-  <img src="assets/sync-desktop.png" width="60%" alt="Sync - Desktop">
-  <img src="assets/sync-mobile.png" width="20%" alt="Sync - Mobile">
-</div>
+**Profile** — Appearance (theme and accent color), AI settings, semantic search (vector model), and about / license.
 
----
+## Install
 
-## Core Features
-
-### 🤖 AI-Powered Reading
-
-- **Intelligent Chat** - Ask questions about your books, AI knows your position, selected text, and highlights
-- **Semantic Search** - Beyond keywords, vector retrieval + BM25 hybrid search
-- **Instant Translation** - AI translation or DeepL, 19 languages supported
-- **Multiple AI Providers** - OpenAI, Claude, Gemini, Ollama, DeepSeek
-- **Skills System** - Built-in skills (summarizer, concept explainer, character tracker, etc.) + create custom skills
-
-### 📝 Annotation & Knowledge Management
-
-- **5-Color Highlights** - Yellow/Green/Blue/Pink/Purple, hover to preview notes
-- **Markdown Notes** - Rich text editor with toolbar, WYSIWYG
-- **Multi-format Export** - Markdown, HTML, JSON, Obsidian, Notion
-
-### 🔊 Text-to-Speech (TTS)
-
-- **Multiple Engines** - Edge TTS, Browser TTS, DashScope (通义千问)
-- **Voice Selection** - 100+ voices in multiple languages
-- **Speed Control** - Adjustable playback speed
-- **Background Playback** - Listen while doing other things
-
-### 📊 Reading Statistics
-
-- **Reading Heatmap** - Visualize your reading habits like GitHub contributions
-- **Trend Charts** - Track daily/weekly/monthly reading time
-- **Streak Tracking** - Longest consecutive reading days
-- **Book Statistics** - Time spent per book, completion rate
-
-### ☁️ Cross-Device Sync
-
-- **WebDAV Support** - Sync your library, highlights, and notes across devices
-- **Auto Sync** - Automatic background synchronization
-- **Conflict Resolution** - Smart merge for concurrent edits
-
-### 📚 Multi-Format Support
-
-**EPUB** · **PDF** · **MOBI** · **AZW** · **AZW3** · **FB2** · **FBZ** · **CBZ** · **TXT** · **UMD**
-
-TXT and UMD are imported by converting them to EPUB for reading, notes, search, and sync.
-
-### 🎨 Customizable Experience
-
-- 5 font themes (CJK optimized)
-- Light/Dark mode
-- Paginated/Continuous scroll
-- Keyboard shortcuts
-- English/Chinese interface
-
----
-
-## Quick Start
-
-### Download
-
-| Platform | Download |
-|----------|----------|
-| macOS (Apple Silicon) | [Download .dmg](https://github.com/codedogQBY/ReadAny/releases/latest) |
-| macOS (Intel) | [Download .dmg](https://github.com/codedogQBY/ReadAny/releases/latest) |
-| Windows | [Download .msi](https://github.com/codedogQBY/ReadAny/releases/latest) |
-| Linux | [Download .AppImage](https://github.com/codedogQBY/ReadAny/releases/latest) |
-| iOS | [Join TestFlight](https://testflight.apple.com/join/qNdvNv2p) |
-| Android | [Download .apk](https://github.com/codedogQBY/ReadAny/releases/latest) |
-
-#### Homebrew (macOS)
+Shudeng is not on the App Store — install it by building it yourself or sideloading a signed build (Apple's signing and DRM are incompatible with GPLv3, see [License](#license)).
 
 ```bash
-brew tap codedogQBY/readany
-brew install --cask readany
-```
-
-### 3 Steps to Get Started
-
-1. **Import Books** - Drag and drop files into library
-2. **Start Reading** - Double-click to open, immersive experience
-3. **Configure AI** (Optional) - Settings → AI → Enter API Key
-
-### Mobile Apps
-
-ReadAny is now available on mobile devices!
-
-**Expo (React Native) Version:**
-```bash
-# Clone and setup
-git clone https://github.com/codedogQBY/ReadAny.git
+git clone https://github.com/andyWang1688/ReadAny.git
 cd ReadAny
 pnpm install
-
-# Install/run the development build on iOS
-pnpm expo:ios
-
-# Install/run the development build on iOS Simulator
-pnpm expo:ios:simulator
-
-# Install/run the development build on Android
-# Start an Android emulator first, or connect a device.
-pnpm expo:android
-
-# Start Metro for the installed development build
-pnpm expo:start
+pnpm ios:core && pnpm ios:assets   # bundle core and reader assets, build products are not committed
 ```
 
-Mobile development uses an Expo development build with `expo-dev-client`, not
-Expo Go. Expo Go cannot load ReadAny's native modules and app configuration. Use
-`pnpm expo:ios`, `pnpm expo:ios:simulator`, or `pnpm expo:android` the first
-time, or whenever native dependencies/configuration change, then use
-`pnpm expo:start` for daily JS debugging in the installed ReadAny development
-app.
+The fastest route to an installable build:
 
-For simulators, use `pnpm expo:ios:simulator` on iOS. For Android, start an
-Android emulator first, then run `pnpm expo:android`.
+```bash
+pnpm ios:ipa   # signed IPA using your local Apple Development certificate and provisioning profile
+```
 
-Mobile app source lives in [`packages/app-expo`](packages/app-expo).
-
-### AI Configuration
-
-| Provider | Get API Key |
-|----------|-------------|
-| OpenAI | [platform.openai.com](https://platform.openai.com/) |
-| Anthropic Claude | [console.anthropic.com](https://console.anthropic.com/) |
-| Google Gemini | [aistudio.google.com](https://aistudio.google.com/) |
-| Ollama / DeepSeek | Local or custom endpoint |
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Desktop | [Tauri 2](https://tauri.app/) (Rust) |
-| Mobile | [Expo](https://expo.dev/) (React Native) + Tauri Mobile |
-| Frontend | [React 19](https://react.dev/) + TypeScript |
-| Build | [Vite 7](https://vite.dev/) |
-| Styling | [Tailwind CSS 4](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) |
-| State | [Zustand](https://zustand.docs.pmnd.rs/) |
-| Database | SQLite |
-| E-Book | [foliate-js](https://github.com/johnfactotum/foliate-js) |
-| AI/LLM | [LangChain.js](https://js.langchain.com/) + [LangGraph](https://langchain-ai.github.io/langgraphjs/) |
-| Embeddings | [Transformers.js](https://huggingface.co/docs/transformers.js) |
-
----
+Or just use Xcode: open `packages/app-ios/Shudeng.xcodeproj`, set Signing to your own team, plug in an iPhone, and press ⌘R. Requires iOS 17+, iPhone only.
 
 ## Development
 
+### Architecture
+
+| Layer | Choice | Notes |
+| --- | --- | --- |
+| UI | SwiftUI | Native, no React Native / Expo |
+| Logic | `packages/core` (TypeScript) | Runs inside JavaScriptCore; reuses AI, RAG, stats, TTS, EPUB parsing |
+| Reading view | WKWebView + `packages/foliate-js` | Pagination, highlights, notes, follow-along reading |
+| PDF | PDFKit | Replaces pdf.js |
+| Vectors | Apple NLEmbedding | Embeddings computed on device |
+| Host | Swift | Streaming network (URLSession SSE), SQLite, timers, Keychain |
+
+Boot order: `bridge-shim.js` (fills the gaps in JSC) → `core.js` → `app-bootstrap.js` (wraps Swift primitives into `IPlatformService`). More detail in [`packages/app-ios/README.md`](packages/app-ios/README.md) (Chinese).
+
+### Commands
+
 ```bash
-# Clone
-git clone https://github.com/codedogQBY/ReadAny.git
-cd ReadAny
+pnpm ios:core     # bundle core → CoreBridge/Generated/core.js
+pnpm ios:assets   # core.js + reader.html → Shudeng/Resources/
+pnpm ios:test     # CoreBridge tests (core loading, LangChain, SQLite, host layer, EPUB import, streaming chat)
+pnpm ios:ipa      # build a signed IPA
 
-# Install
-pnpm install
-
-# Dev (Desktop)
-pnpm tauri dev
-
-# Dev (Mobile - Expo development build, not Expo Go)
-# First install/run the native development build:
-pnpm expo:ios
-pnpm expo:ios:simulator
-pnpm expo:android
-
-# Then start Metro for the installed development app:
-pnpm expo:start
-
-# Build
-pnpm tauri build
+# Run XCUITest on a simulator or device (simulators get a mock AI endpoint automatically)
+bash packages/app-ios/scripts/run-ui-tests.sh <device UDID>
 ```
 
-Mobile development uses `expo-dev-client`, so Expo Go is not supported. Re-run
-`pnpm expo:ios`, `pnpm expo:ios:simulator`, or `pnpm expo:android` after
-changing native dependencies, `app.config.js`, permissions, schemes, or build
-plugins.
+## Testing
 
-**Requirements:** Node.js ≥18, pnpm ≥9, Rust (for Tauri), plus Xcode for iOS or
-Android Studio/SDK for Android mobile development.
+- **CoreBridge (SwiftPM)**: `pnpm ios:test`. The live streaming test needs an endpoint — pass `SHUDENG_TEST_BASE_URL`, `SHUDENG_TEST_API_KEY`, and `SHUDENG_TEST_MODEL`.
+- **XCUITest**: 23 cases covering library, reader, AI chat, notes, stats, settings, import, and restore-after-reinstall; run them all through `run-ui-tests.sh`.
 
----
+## Data and privacy
 
-## Roadmap
-
-- [x] **Mobile apps** — iOS and Android versions available
-- [x] **TTS (Text-to-Speech)** — Edge TTS, multiple voices
-- [x] **Reading Statistics** — Heatmap, trends, streaks
-- [x] **Skills System** — Built-in + custom AI skills
-- [x] **WebDAV Sync** — Cross-device synchronization
-- [ ] More AI models (Qwen, GLM, Llama)
-- [ ] PDF reflow/re-render
-- [ ] Plugin system
-- [ ] Cloud sync (official service)
-
----
-
-## Contributing
-
-Contributions welcome! Bug reports, feature requests, pull requests all appreciated.
-
-1. Fork → 2. Branch → 3. PR
-
-Please run `pnpm lint` before submitting to ensure code style consistency.
-
----
+Books, covers, progress, highlights, notes, and chat history are stored on device (SQLite and app sandbox files). Only when you ask a question does the app send the current page or selected text plus the conversation history to the model endpoint you configured yourself — both the URL and the key are yours, and the key is kept in the Keychain. There is no account system and no telemetry.
 
 ## License
 
-[GPL-3.0](LICENSE) © 2024 ReadAny Team
-
-This project is open source under the GNU General Public License v3.0. You are free to use, modify, and distribute the code, but any derivative works must also be open source under the same license.
-
-**Note:** While the source code is freely available, the official app store versions may be offered for a fee to support ongoing development and cover certificate costs. You can always build the app yourself at no cost.
-
----
-
-## Acknowledgments
-
-- [foliate-js](https://github.com/johnfactotum/foliate-js) - E-book rendering engine
-- [Tauri](https://tauri.app/) - Cross-platform desktop framework
-- [Expo](https://expo.dev/) - React Native development platform
-- [LangChain.js](https://js.langchain.com/) - AI orchestration framework
-- [Radix UI](https://www.radix-ui.com/) - Accessible UI components
-- [Lucide](https://lucide.dev/) - Icon library
-
----
-
-## Community
-
-Thanks to [linux.do](https://linux.do/) — a vibrant Chinese tech community where you can learn about AI, development, and more.
-
----
-
-<p align="center">
-  Made with ❤️ by the ReadAny Team
-</p>
-
-<p align="center">
-  <a href="https://github.com/codedogQBY/ReadAny/discussions">💬 Discussions</a> •
-  <a href="https://github.com/codedogQBY/ReadAny/issues">🐛 Issues</a>
-</p>
-
-<p align="center">
-  <img src="assets/小红书群.jpg" width="200" alt="小红书群">
-  <img src="assets/微信群.jpg" width="200" alt="微信群">
-</p>
-
-## ☕ Support the Project
-
-If you find ReadAny helpful, consider buying me a coffee to support ongoing development!
-
-<p align="center">
-  <img src="assets/微信赞赏码.jpg" width="200" alt="微信赞赏码">
-  <img src="assets/支付宝收款码.jpg" width="200" alt="支付宝收款码">
-</p>
-
-<p align="center">
-  <a href="https://ifdian.net/a/codedogQBY">Dining Table on Afdian</a>
-</p>
-
----
-
-## Star History
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=codedogQBY/ReadAny&type=Date&theme=dark" />
-  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=codedogQBY/ReadAny&type=Date" />
-  <img alt="Star History Chart" src="https://api.star-history.com/image?repos=codedogQBY/ReadAny&type=Date" />
-</picture>
+- **GPL-3.0-or-later** (see [LICENSE](LICENSE)). Shudeng reuses ReadAny's `packages/core`, so the whole app is distributed under GPL-3.0 with corresponding source available.
+- Because GPLv3 does not accept Apple's additional signing and DRM restrictions, Shudeng is distributed as source plus self-signed / sideloaded builds rather than through the App Store.
+- Thanks to [ReadAny](https://github.com/codedogQBY/ReadAny) (core, semantic search, skills) and [foliate-js](https://github.com/johnfactotum/foliate-js) (EPUB rendering).

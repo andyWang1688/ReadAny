@@ -1,381 +1,115 @@
-<p align="center">
-  <img src="packages/app/public/logo.svg" alt="ReadAny Logo" width="120" height="120">
-</p>
-
-<h1 align="center">ReadAny</h1>
+<h1 align="center">书灯 · Shudeng</h1>
 
 <p align="center">
-  <strong>本地优先的 AI 电子书阅读器，覆盖桌面端与移动端</strong>
+  <strong>本地优先的 AI 阅读器 · 原生 iPhone App</strong><br>
+  一盏照书的灯，照亮书里读不懂的地方。
 </p>
 
 <p align="center">
-  <em>"为什么读完就忘？为什么笔记零散？为什么搜索只能找关键词？"</em>
-</p>
-
-<p align="center">
-  ReadAny 帮你向书籍提问、按语义寻找观点，并用 RAG 对话、语义搜索、高亮笔记、TTS 与 WebDAV 同步构建私有阅读知识库。
-</p>
-
-<p align="center">
-  <a href="https://github.com/codedogQBY/ReadAny/releases/latest">
-    <img src="https://img.shields.io/github/v/release/codedogQBY/ReadAny?color=blue&label=Download" alt="Release">
-  </a>
-  <a href="https://github.com/codedogQBY/ReadAny/stargazers">
-    <img src="https://img.shields.io/github/stars/codedogQBY/ReadAny?color=yellow" alt="Stars">
-  </a>
-  <a href="https://github.com/codedogQBY/ReadAny/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/codedogQBY/ReadAny?color=green" alt="License">
-  </a>
-  <img src="https://img.shields.io/badge/平台-macOS%20%7C%20Windows%20%7C%20Linux%20%7C%20iOS%20%7C%20Android-blue" alt="Platform">
-  <a href="README.md">
-    <img src="https://img.shields.io/badge/lang-English-blue" alt="English">
-  </a>
+  <img alt="Platform" src="https://img.shields.io/badge/iOS-17%2B-blue">
+  <img alt="SwiftUI" src="https://img.shields.io/badge/UI-SwiftUI-black">
+  <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0--or--later-green">
+  <a href="README.md"><img alt="English" src="https://img.shields.io/badge/lang-English-blue"></a>
 </p>
 
 ---
 
-> 🚀 **v2.0 更新**: 移动端应用（iOS/Android）现已上线！详见下方 [移动端](#移动端应用) 章节。
+书灯把「读」和「问」放进同一块屏幕：EPUB / PDF 导进来就能读，读到有疑问的地方选中文字直接问 AI，回答带着当前页的上下文；书、笔记、高亮和对话都留在本机。
 
-## AI 原生阅读工作流
+> 本仓库基于 [ReadAny](https://github.com/codedogQBY/ReadAny)（GPL-3.0-or-later）开发。桌面端 / Web 端代码来自上游，书灯是这套 core 的原生 iOS 重写，位于 `packages/app-ios/`。
 
-- **和书库对话** - 围绕当前书籍、选中文本和阅读位置提问，答案基于你的阅读上下文生成
-- **按语义找内容** - 向量检索 + BM25 混合搜索，不记得原文关键词也能找回相关概念
-- **知识留在本地** - 本地 embeddings 与本地向量库，让书籍、高亮和笔记具备离线可用能力
-- **接入常用模型** - 支持 OpenAI、Claude、Gemini、Ollama、DeepSeek 以及兼容接口
+## 截图
 
-## 为什么选择 ReadAny？
+| 书架 | 阅读 |
+| --- | --- |
+| ![书架](assets/ios/library.png) | ![阅读](assets/ios/reader.png) |
 
-| 痛点 | 传统阅读器 | ReadAny |
-|------|-----------|---------|
-| 搜索内容 | 只能关键词 | **语义搜索**，理解你的意图 |
-| 提问书籍 | 自己翻找答案 | **AI 直接回答 + 定位** |
-| 做笔记 | 手动复制粘贴 | **选中即高亮**，一键导出 |
-| 知识管理 | 笔记散落各处 | **统一管理**，多格式导出 |
-| 隐私安全 | 上传云端 | **本地向量库**，完全离线可用 |
+| AI 对话 | 笔记 | 阅读统计 |
+| --- | --- | --- |
+| ![AI 对话](assets/ios/ai-threads.png) | ![笔记](assets/ios/notes.png) | ![阅读统计](assets/ios/stats.png) |
 
-### 与竞品对比
+## 它解决什么
 
-| 特性 | ReadAny | Calibre | KOReader | Apple Books |
-|------|---------|---------|----------|-------------|
-| AI 对话 | ✅ | ❌ | ❌ | ❌ |
-| 语义搜索 (RAG) | ✅ | ❌ | ❌ | ❌ |
-| 本地向量库 | ✅ | - | - | ❌ |
-| TTS 语音朗读 | ✅ | ❌ | 有限 | 有限 |
-| 阅读统计 | ✅ | ❌ | ❌ | 有限 |
-| WebDAV 同步 | ✅ | ❌ | ❌ | ❌ |
-| 技能系统 | ✅ | ❌ | ❌ | ❌ |
-| 多格式支持 | 10+ | 15+ | 10+ | 2 |
-| 笔记导出 | 5 种格式 | 有限 | 有限 | 有限 |
-| 开源免费 | ✅ | ✅ | ✅ | ❌ |
+| 读书时的麻烦 | 一般阅读器 | 书灯 |
+| --- | --- | --- |
+| 读完就忘，想找回某段话 | 只能按关键词搜 | 语义检索，按意思直接找到那一段 |
+| 读到不懂的地方 | 切出去查，回来找不到位置 | 选中文字就地提问，AI 带着当前页回答 |
+| 笔记散落各处 | 记在别的 App 里 | 高亮 / 笔记 / 书签按书汇总，可导出 |
+| 隐私顾虑 | 内容和笔记上云 | 书与笔记只在本机，模型由你自己接 |
 
----
+## 功能
 
-## 应用截图
+**书架** — EPUB / PDF 导入（文件、AirDrop），网格封面、按书名或作者搜索、在已建索引的书里做语义检索，筛选（全部 / 在读 / 未读 / 读完）与排序，每本书带阅读进度。
 
-### 主界面
+**阅读** — 分页与连续滚动两种翻页；目录、书内搜索、书签；白 / 黑 / 护眼三种主题，字号、行距、页边距可调；底栏给出本章进度、全书百分比和剩余时间；顶部浮层收起后就是干净的正文。
 
-<div align="center">
-  <img src="assets/hero-screenshot.png" width="80%" alt="ReadAny 主界面">
-</div>
+**AI 对话** — 历史按书分组，不指定书就是「临时对话」，新建对话时用 chip 选书或直接开临时对话；选中文字或带着当前页提问，回答流式输出、思考过程可折叠；支持思维导图、Mermaid 图等技能；服务商可选 OpenAI 兼容 / Anthropic / Gemini / 自定义，API Key 只进 Keychain。
 
-### AI 智能对话
+**笔记** — 高亮、笔记、书签集中在一页，按书分组、可搜索，支持导出。
 
-<div align="center">
-  <img src="assets/ai-chat-desktop.png" width="60%" alt="AI 对话 - 桌面端">
-  <img src="assets/ai-chat-mobile.png" width="20%" alt="AI 对话 - 移动端">
-</div>
+**阅读统计** — 今日 / 本周 / 累计时长、连续天数、最近 14 天柱状；阅读报告按周 / 月 / 全部，还能让 AI 说两句；徽章与书目排行。
 
-### 笔记和高亮
+**朗读** — 系统语音朗读正文、跟读高亮、睡眠定时。
 
-<div align="center">
-  <img src="assets/notes-desktop.png" width="60%" alt="笔记 - 桌面端">
-  <img src="assets/notes-mobile.png" width="20%" alt="笔记 - 移动端">
-</div>
+**我的** — 外观（主题 + 主题色）、AI 设置、语义检索（向量模型）、关于与许可证。
 
-### TTS 语音朗读
+## 安装
 
-<div align="center">
-  <img src="assets/tts-desktop.png" width="60%" alt="语音朗读 - 桌面端">
-  <img src="assets/tts-mobile.png" width="20%" alt="语音朗读 - 移动端">
-</div>
-
-### 阅读统计
-
-<div align="center">
-  <img src="assets/stats-desktop.png" width="60%" alt="阅读统计 - 桌面端">
-  <img src="assets/stats-mobile.png" width="20%" alt="阅读统计 - 移动端">
-</div>
-
-### 跨设备同步
-
-<div align="center">
-  <img src="assets/sync-desktop.png" width="60%" alt="同步 - 桌面端">
-  <img src="assets/sync-mobile.png" width="20%" alt="同步 - 移动端">
-</div>
-
----
-
-## 核心功能
-
-### 🤖 AI 智能阅读
-
-- **智能对话** - 针对书籍内容提问，AI 知道你的位置、选中文字、高亮笔记
-- **语义搜索** - 超越关键词，向量检索 + BM25 混合搜索
-- **即时翻译** - AI 翻译或 DeepL，支持 19 种语言
-- **多模型支持** - OpenAI、Claude、Gemini、Ollama、DeepSeek
-- **技能系统** - 内置技能（摘要、概念解释、角色追踪等）+ 自定义技能
-
-### 📝 标注与知识管理
-
-- **5 色高亮** - 黄/绿/蓝/粉/紫，悬停预览笔记
-- **Markdown 笔记** - 富文本编辑器，工具栏操作，所见即所得
-- **多格式导出** - Markdown、HTML、JSON、Obsidian、Notion
-
-### 🔊 语音朗读 (TTS)
-
-- **多引擎支持** - Edge TTS、浏览器 TTS、通义千问
-- **丰富音色** - 100+ 种语音，多语言支持
-- **语速调节** - 可调节播放速度
-- **后台播放** - 边听边做其他事情
-
-### 📊 阅读统计
-
-- **阅读热力图** - 类似 GitHub 贡献图，可视化阅读习惯
-- **趋势图表** - 追踪每日/每周/每月阅读时长
-- **连续天数** - 记录最长连续阅读天数
-- **书籍统计** - 每本书的阅读时长、完成度
-
-### ☁️ 跨设备同步
-
-- **WebDAV 支持** - 跨设备同步书库、高亮、笔记
-- **自动同步** - 后台自动同步
-- **冲突解决** - 智能合并并发编辑
-
-### 📚 多格式支持
-
-**EPUB** · **PDF** · **MOBI** · **AZW** · **AZW3** · **FB2** · **FBZ** · **CBZ** · **TXT** · **UMD**
-
-TXT 和 UMD 会在导入时转换为 EPUB，以支持阅读、笔记、搜索与同步。
-
-### 🎨 个性化体验
-
-- 5 种字体主题（含 CJK 优化）
-- 明/暗主题切换
-- 分页/连续滚动
-- 快捷键支持
-- 中英双语界面
-
----
-
-## 快速开始
-
-### 下载安装
-
-| 平台 | 下载 |
-|------|------|
-| macOS (Apple Silicon) | [下载 .dmg](https://github.com/codedogQBY/ReadAny/releases/latest) |
-| macOS (Intel) | [下载 .dmg](https://github.com/codedogQBY/ReadAny/releases/latest) |
-| Windows | [下载 .msi](https://github.com/codedogQBY/ReadAny/releases/latest) |
-| Linux | [下载 .AppImage](https://github.com/codedogQBY/ReadAny/releases/latest) |
-| iOS | [加入 TestFlight](https://testflight.apple.com/join/qNdvNv2p) |
-| Android | [下载 .apk](https://github.com/codedogQBY/ReadAny/releases/latest) |
-
-#### Homebrew（macOS）
+不上架 App Store，用自签 / 侧载安装（Apple 的签名与 DRM 与 GPLv3 冲突，详见「许可」）。
 
 ```bash
-brew tap codedogQBY/readany
-brew install --cask readany
-```
-
-### 3 步上手
-
-1. **导入书籍** - 拖拽文件到书库
-2. **开始阅读** - 双击打开，沉浸体验
-3. **配置 AI**（可选）- 设置 → AI → 填入 API Key
-
-### 移动端应用
-
-ReadAny 现已支持移动设备！
-
-**Expo (React Native) 版本：**
-```bash
-# 克隆并设置
-git clone https://github.com/codedogQBY/ReadAny.git
+git clone https://github.com/andyWang1688/ReadAny.git
 cd ReadAny
 pnpm install
-
-# 安装/运行 iOS 开发构建
-pnpm expo:ios
-
-# 安装/运行 iOS 模拟器开发构建
-pnpm expo:ios:simulator
-
-# 安装/运行 Android 开发构建
-# 先启动 Android 模拟器，或连接真机。
-pnpm expo:android
-
-# 为已安装的开发构建启动 Metro
-pnpm expo:start
+pnpm ios:core && pnpm ios:assets   # 打包 core 与阅读器资源，产物不入库
 ```
 
-移动端开发使用带 `expo-dev-client` 的 Expo development build，不再使用
-Expo Go。Expo Go 无法加载 ReadAny 当前依赖的原生模块和应用配置。首次调试，
-或原生依赖/配置发生变化时，先运行 `pnpm expo:ios`、`pnpm expo:ios:simulator`
-或 `pnpm expo:android` 安装开发版 App；日常 JS 调试再运行 `pnpm expo:start`，
-用已安装的 ReadAny 开发版 App 连接 Metro。
+拿到装机包最快的一条路：
 
-模拟器调试时，iOS 使用 `pnpm expo:ios:simulator`；Android 先启动 Android
-模拟器，再运行 `pnpm expo:android`。
+```bash
+pnpm ios:ipa   # 用本机 Apple Development 证书 + 开发描述文件出已签名 IPA
+```
 
-移动端源码位于 [`packages/app-expo`](packages/app-expo)。
-
-### AI 配置
-
-| Provider | 获取方式 |
-|----------|---------|
-| OpenAI | [platform.openai.com](https://platform.openai.com/) |
-| Anthropic Claude | [console.anthropic.com](https://console.anthropic.com/) |
-| Google Gemini | [aistudio.google.com](https://aistudio.google.com/) |
-| Ollama / DeepSeek | 本地或自定义端点 |
-
----
-
-## 技术栈
-
-| 层级 | 技术 |
-|------|------|
-| 桌面框架 | [Tauri 2](https://tauri.app/) (Rust) |
-| 移动端 | [Expo](https://expo.dev/) (React Native) + Tauri Mobile |
-| 前端 | [React 19](https://react.dev/) + TypeScript |
-| 构建 | [Vite 7](https://vite.dev/) |
-| 样式 | [Tailwind CSS 4](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) |
-| 状态 | [Zustand](https://zustand.docs.pmnd.rs/) |
-| 数据库 | SQLite |
-| 电子书 | [foliate-js](https://github.com/johnfactotum/foliate-js) |
-| AI/LLM | [LangChain.js](https://js.langchain.com/) + [LangGraph](https://langchain-ai.github.io/langgraphjs/) |
-| 嵌入模型 | [Transformers.js](https://huggingface.co/docs/transformers.js) |
-
----
+也可以直接用 Xcode：打开 `packages/app-ios/Shudeng.xcodeproj`，把 Signing 换成自己的 team，插上 iPhone 按 ⌘R。要求 iOS 17+、仅 iPhone。
 
 ## 开发
 
+### 架构
+
+| 层 | 选型 | 说明 |
+| --- | --- | --- |
+| UI | SwiftUI | 全量原生，无 React Native / Expo |
+| 逻辑 | `packages/core`（TypeScript） | JavaScriptCore 里直接跑，复用 AI / RAG / 统计 / TTS / EPUB 解析 |
+| 阅读渲染 | WKWebView + `packages/foliate-js` | 分页、高亮、笔记、跟读 |
+| PDF | PDFKit | 替代 pdf.js |
+| 向量 | Apple NLEmbedding | 设备端算向量，不外传 |
+| 宿主能力 | Swift | 网络（URLSession 流式 SSE）、SQLite、定时器、Keychain |
+
+装配顺序：`bridge-shim.js`（补 JSC 缺失 API）→ `core.js` → `app-bootstrap.js`（把 Swift 原语包成 `IPlatformService`）。详细说明见 [`packages/app-ios/README.md`](packages/app-ios/README.md)。
+
+### 常用命令
+
 ```bash
-# 克隆
-git clone https://github.com/codedogQBY/ReadAny.git
-cd ReadAny
+pnpm ios:core     # 打包 core → CoreBridge/Generated/core.js
+pnpm ios:assets   # core.js + reader.html → Shudeng/Resources/
+pnpm ios:test     # CoreBridge 测试（core 加载 / LangChain / SQLite / 宿主层 / EPUB 导入 / 流式对话）
+pnpm ios:ipa      # 出已签名 IPA
 
-# 安装依赖
-pnpm install
-
-# 开发模式（桌面端）
-pnpm tauri dev
-
-# 开发模式（移动端 - Expo development build，不是 Expo Go）
-# 首次先安装/运行原生开发构建：
-pnpm expo:ios
-pnpm expo:ios:simulator
-pnpm expo:android
-
-# 然后为已安装的开发版 App 启动 Metro：
-pnpm expo:start
-
-# 构建
-pnpm tauri build
+# 在模拟器或真机上跑 XCUITest（模拟器会自动起 mock AI 端点）
+bash packages/app-ios/scripts/run-ui-tests.sh <设备 UDID>
 ```
 
-移动端使用 `expo-dev-client`，不支持 Expo Go。修改原生依赖、`app.config.js`、
-权限、scheme 或 Expo plugins 后，需要重新运行 `pnpm expo:ios`、
-`pnpm expo:ios:simulator` 或 `pnpm expo:android` 生成/安装开发构建。
+## 测试
 
-**环境要求：** Node.js ≥18, pnpm ≥9, Rust（Tauri 需要）；移动端开发还需要
-iOS 的 Xcode 或 Android 的 Android Studio/SDK。
+- **CoreBridge（SwiftPM）**：`pnpm ios:test`。真实流式对话那条用例要端点，用 `SHUDENG_TEST_BASE_URL` / `SHUDENG_TEST_API_KEY` / `SHUDENG_TEST_MODEL` 传。
+- **XCUITest**：23 条用例覆盖书架、阅读、AI、笔记、统计、设置、导入与卸载重装恢复，`run-ui-tests.sh` 一处跑完。
 
----
+## 数据与隐私
 
-## 开发路线
+书、封面、进度、高亮、笔记、对话历史都写在本机（SQLite 与 App 沙盒文件）。只有你主动提问时，才会把「当前页或选中段落 + 对话历史」发给你配置的模型服务，接口地址和 Key 都由你自己填，Key 存在 Keychain。App 没有账号系统，也不做数据回传。
 
-- [x] **移动端应用** — iOS 和 Android 版本已上线
-- [x] **TTS 语音朗读** — Edge TTS，多音色
-- [x] **阅读统计** — 热力图、趋势、连续天数
-- [x] **技能系统** — 内置 + 自定义 AI 技能
-- [x] **WebDAV 同步** — 跨设备同步
-- [ ] 更多 AI 模型（Qwen、GLM、Llama）
-- [ ] PDF 重排/重渲染
-- [ ] 插件系统
-- [ ] 官方云同步服务
+## 许可与致谢
 
----
-
-## 参与贡献
-
-欢迎贡献代码、报告 Bug、提出建议！
-
-1. Fork → 2. Branch → 3. PR
-
-提交前请运行 `pnpm lint` 确保代码风格一致。
-
----
-
-## 开源协议
-
-[GPL-3.0](LICENSE) © 2024 ReadAny Team
-
-本项目采用 GNU General Public License v3.0 开源协议。你可以自由使用、修改和分发代码，但任何衍生作品必须以相同协议开源。
-
-**说明：** 源代码完全开源免费，但官方应用商店版本可能会收取一定费用，用于支持持续开发和覆盖证书成本。你始终可以免费自行编译使用。
-
----
-
-## 致谢
-
-- [foliate-js](https://github.com/johnfactotum/foliate-js) - 电子书渲染引擎
-- [Tauri](https://tauri.app/) - 跨平台桌面框架
-- [Expo](https://expo.dev/) - React Native 开发平台
-- [LangChain.js](https://js.langchain.com/) - AI 编排框架
-- [Radix UI](https://www.radix-ui.com/) - 无障碍 UI 组件
-- [Lucide](https://lucide.dev/) - 图标库
-
----
-
-## 社区
-
-感谢 [linux.do](https://linux.do/) — 一个活跃的中文技术社区，在这里你可以学习 AI、开发等前沿技术。
-
----
-
-<p align="center">
-  用 ❤️ 打造 by ReadAny Team
-</p>
-
-<p align="center">
-  <a href="https://github.com/codedogQBY/ReadAny/discussions">💬 讨论区</a> •
-  <a href="https://github.com/codedogQBY/ReadAny/issues">🐛 问题反馈</a>
-</p>
-
-<p align="center">
-  <img src="assets/小红书群.jpg" width="200" alt="小红书群">
-  <img src="assets/微信群.jpg" width="200" alt="微信群">
-</p>
-
-## ☕ 请作者喝杯咖啡
-
-如果你觉得 ReadAny 对你有帮助，欢迎请我喝杯咖啡，支持项目的持续开发！
-
-<p align="center">
-  <img src="assets/微信赞赏码.jpg" width="200" alt="微信赞赏码">
-  <img src="assets/支付宝收款码.jpg" width="200" alt="支付宝收款码">
-</p>
-
-<p align="center">
-  <a href="https://ifdian.net/a/codedogQBY">餐桌：爱发电支持</a>
-</p>
-
----
-
-## Star 历史
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/image?repos=codedogQBY/ReadAny&type=Date&theme=dark" />
-  <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/image?repos=codedogQBY/ReadAny&type=Date" />
-  <img alt="Star History Chart" src="https://api.star-history.com/image?repos=codedogQBY/ReadAny&type=Date" />
-</picture>
+- 本项目沿用 **GPL-3.0-or-later**（见 [LICENSE](LICENSE)）：复用了 ReadAny 的 `packages/core`，整个 App 按 GPL-3.0 分发，随二进制提供对应源码。
+- 因为 GPLv3 不接受 Apple 的额外签名与 DRM 限制，分发方式是公开源码 + 自签 / 侧载，不上架 App Store。
+- 感谢 [ReadAny](https://github.com/codedogQBY/ReadAny)（core、语义检索、技能系统）与 [foliate-js](https://github.com/johnfactotum/foliate-js)（EPUB 渲染）。
