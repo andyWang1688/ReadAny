@@ -214,7 +214,7 @@ final class ShudengUITests: XCTestCase {
 
     func test03ChatInputIsUsable() throws {
         app.tabBars.buttons["AI"].tap()
-        // AI 栏首屏是会话列表，右上角那支笔才是「开一段对话」。
+        // AI 栏首屏是会话列表，右上角的加号开一段新对话。
         let compose = app.buttons["chat.newThread"]
         XCTAssertTrue(compose.waitForExistence(timeout: 15), "AI 会话列表没加载")
         compose.tap()
@@ -227,6 +227,18 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(send.waitForExistence(timeout: 5), "发送按钮没出现")
         XCTAssertTrue(send.isEnabled, "有内容时发送键应该可用")
         snap("03-chat-input")
+
+        // 键盘要能收回去：键盘上的「收起键盘」和点正文两条路都得行。
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5), "点了输入框键盘没起来")
+        let hideKeyboard = app.buttons["chat.hideKeyboard"]
+        XCTAssertTrue(hideKeyboard.waitForExistence(timeout: 5), "键盘上没有「收起键盘」")
+        hideKeyboard.tap()
+        XCTAssertTrue(app.keyboards.element.waitForNonExistence(timeout: 5), "点了「收起键盘」键盘还在")
+
+        input.tap()
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5), "再点输入框键盘没起来")
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).tap()
+        XCTAssertTrue(app.keyboards.element.waitForNonExistence(timeout: 5), "点正文没收起键盘")
     }
 
     func test04ReaderTOCSearchAndSettings() throws {

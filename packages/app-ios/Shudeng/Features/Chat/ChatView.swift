@@ -17,6 +17,8 @@ struct ChatView: View {
     @State private var showMindMap = false
     /// 折起来 / 展开的思考过程（按消息 id 记）。
     @State private var expandedThinking: Set<String> = []
+    /// 输入框的焦点：键盘上的「收起」和点正文都要能把它放掉。
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
@@ -161,6 +163,9 @@ struct ChatSheet: View {
                     }
                 }
             }
+            // 键盘收不回去是最招人烦的：往下拖正文收、点正文也收。
+            .scrollDismissesKeyboard(.interactively)
+            .simultaneousGesture(TapGesture().onEnded { inputFocused = false })
         }
     }
 
@@ -228,6 +233,7 @@ struct ChatSheet: View {
                 TextField(pendingSkill?.needsInput ?? (activeBook == nil ? "随便问点什么…" : "问这本书…"), text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...5)
+                    .focused($inputFocused)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(
@@ -270,6 +276,17 @@ struct ChatSheet: View {
         .padding(.top, 8)
         .padding(.bottom, 10)
         .background(.bar)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button {
+                    inputFocused = false
+                } label: {
+                    Label("收起键盘", systemImage: "keyboard.chevron.compact.down")
+                }
+                .accessibilityIdentifier("chat.hideKeyboard")
+            }
+        }
     }
 
     private var canSend: Bool {
