@@ -111,6 +111,23 @@ final class ShudengUITests: XCTestCase {
             .firstMatch
     }
 
+    /// 栏目级标题按需求去掉了，导航栏里查不到「书库 / 笔记 / 我的」，
+    /// 换成页面里独有的元素当锚点（书库的导入按钮、笔记的导出、我的的外观入口）。
+    @discardableResult
+    private func waitForLibrary(_ target: XCUIApplication? = nil, timeout: TimeInterval = 30) -> Bool {
+        (target ?? app).buttons["library.import"].waitForExistence(timeout: timeout)
+    }
+
+    @discardableResult
+    private func waitForNotes(timeout: TimeInterval = 20) -> Bool {
+        app.buttons["notes.export"].waitForExistence(timeout: timeout)
+    }
+
+    @discardableResult
+    private func waitForProfile(_ target: XCUIApplication? = nil, timeout: TimeInterval = 15) -> Bool {
+        (target ?? app).buttons["profile.appearance"].waitForExistence(timeout: timeout)
+    }
+
     private func waitForProgressChange(from old: String, timeout: TimeInterval = 10) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -127,13 +144,23 @@ final class ShudengUITests: XCTestCase {
         "\(app.staticTexts["reader.progress"].label)|\(app.staticTexts["reader.percent"].label)"
     }
 
-    /// 页脚要显示「页码 / 本章总页数」。以前这里会把章节号当页码（1 / 5、4 / 5 跟着章节跳），
-    /// 或者被 clamp 成 0，读起来分不清是页码还是章节。
+    /// 从页脚读出（本章第几页，本章共几页），格式随底栏文案变化也不影响判断。
+    private func footerPages(_ target: XCUIApplication? = nil) -> (current: Int, total: Int)? {
+        let label = (target ?? app).staticTexts["reader.progress"].label
+        let parts = label.split(whereSeparator: { !$0.isNumber }).map(String.init)
+        guard parts.count == 2, let current = Int(parts[0]), let total = Int(parts[1]) else { return nil }
+        return (current, total)
+    }
+
+    /// 页脚左边是「本章第几页 / 本章共几页」，分页模式写作「本章 2 / 5」，
+    /// 章节还没分好页时退化成「第 3 / 7 节」。两种都要能读出两个数字。
     private func assertFooterPagesAreSane(_ context: String) {
         let label = app.staticTexts["reader.progress"].label
-        let parts = label.split(separator: "/").map { $0.trimmingCharacters(in: .whitespaces) }
+        let parts = label
+            .split(whereSeparator: { !$0.isNumber })
+            .map(String.init)
         guard parts.count == 2, let current = Int(parts[0]), let total = Int(parts[1]) else {
-            return XCTFail("页脚不是「页码 / 总页数」：\(label)（\(context)）")
+            return XCTFail("页脚不是「本章页码 / 本章总页数」：\(label)（\(context)）")
         }
         XCTAssertGreaterThanOrEqual(current, 1, "页码小于 1：\(label)（\(context)）")
         XCTAssertGreaterThanOrEqual(total, 1, "总页数小于 1：\(label)（\(context)）")
@@ -143,7 +170,7 @@ final class ShudengUITests: XCTestCase {
     // MARK: - 用例
 
     func test01LibraryLoads() throws {
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 30), "书库没有加载出来")
+        XCTAssertTrue(waitForLibrary(timeout: 30), "书库没有加载出来")
         let importButton = app.buttons["library.import"]
         XCTAssertTrue(importButton.waitForExistence(timeout: 30), "导入按钮没出现")
         XCTAssertTrue(importButton.isEnabled, "运行时还没准备好，导入按钮被禁用")
@@ -155,11 +182,22 @@ final class ShudengUITests: XCTestCase {
         let progress = app.staticTexts["reader.progress"]
         XCTAssertTrue(progress.waitForExistence(timeout: 40), "阅读器没有渲染出进度")
         let before = footerProgress()
+        let pageBefore = footerPages()
         snap("02-reader-before-turn")
 
-        app.swipeLeft()
-        XCTAssertTrue(waitForProgressChange(from: before), "左滑之后底部进度没变（页码/百分比应随翻页变化）")
+        // 用坐标拖拽翻页：比 swipeLeft 可控，一次拖拽对应一次明确的翻页。
+        let pageStart = app.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: 0.5))
+        let pageEnd = app.coordinate(withNormalizedOffset: CGVector(dx: 0.12, dy: 0.5))
+        pageStart.press(forDuration: 0.05, thenDragTo: pageEnd, withVelocity: .slow, thenHoldForDuration: 0)
+        XCTAssertTrue(waitForProgressChange(from: before), "左滑之后底部进度没变（页码/百分比应随翻页变）")
         assertFooterPagesAreSane("左滑翻页后")
+        // 一次翻页只该前进一页：页码要跟着手势走，不能被一次手势带飞好几页。
+        let pageAfter = footerPages()
+        XCTAssertEqual(
+            pageAfter?.current,
+            (pageBefore?.current ?? 0) + 1,
+            "左滑一页该只前进一页，实际从 \(pageBefore?.current ?? -1) 变成 \(pageAfter?.current ?? -1)"
+        )
         snap("02-reader-after-turn")
 
         let bookmark = app.buttons["reader.bookmark"]
@@ -171,7 +209,7 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["已删除书签"].waitForExistence(timeout: 8), "再次点书签没有出现「已删除书签」")
 
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 10), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 10), "关闭阅读器没有回到书库")
     }
 
     func test03ChatInputIsUsable() throws {
@@ -229,11 +267,11 @@ final class ShudengUITests: XCTestCase {
 
     func test05NotesAndStatsTabs() throws {
         app.tabBars.buttons["笔记"].tap()
-        XCTAssertTrue(app.navigationBars["笔记"].waitForExistence(timeout: 20), "笔记页没加载")
+        XCTAssertTrue(waitForNotes(timeout: 20), "笔记页没加载")
         snap("05-notes")
 
         app.tabBars.buttons["我的"].tap()
-        XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 10), "我的页没加载")
+        XCTAssertTrue(waitForProfile(timeout: 10), "我的页没加载")
         app.staticTexts["阅读统计"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["阅读统计"].waitForExistence(timeout: 15), "统计页没打开")
         XCTAssertTrue(app.staticTexts["今天"].waitForExistence(timeout: 30), "统计没加载出来")
@@ -383,8 +421,18 @@ final class ShudengUITests: XCTestCase {
         snap("08-selection-bar")
         let blue = app.buttons["reader.highlight.blue"]
         XCTAssertTrue(blue.waitForExistence(timeout: 6), "选中工具栏里没有高亮按钮")
+        // 选中文档刚弹出来时会飘一下，等它可点再按，免得点空。
+        let blueDeadline = Date().addingTimeInterval(6)
+        while !blue.isHittable, Date() < blueDeadline { usleep(200_000) }
         blue.tap()
-        XCTAssertTrue(app.staticTexts["已高亮"].waitForExistence(timeout: 12), "高亮没有保存")
+        let savedToast = app.staticTexts["已高亮"]
+        let failedToast = app.staticTexts["高亮没保存上，再试一次"]
+        let toastDeadline = Date().addingTimeInterval(15)
+        while Date() < toastDeadline, !savedToast.exists, !failedToast.exists { usleep(200_000) }
+        XCTAssertTrue(
+            savedToast.exists,
+            failedToast.exists ? "高亮没有保存：core 落库失败" : "高亮没有保存：没有出现保存提示"
+        )
         snap("08-highlighted")
 
         // 设置：字号拉到最大附近 + 切连续滚动再切回
@@ -411,10 +459,10 @@ final class ShudengUITests: XCTestCase {
         // 退出重进：书和进度要还在
         let progressBeforeClose = footerProgress()
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 10), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 10), "关闭阅读器没有回到书库")
 
         app.tabBars.buttons["笔记"].tap()
-        XCTAssertTrue(app.navigationBars["笔记"].waitForExistence(timeout: 20), "笔记页没加载")
+        XCTAssertTrue(waitForNotes(timeout: 20), "笔记页没加载")
         XCTAssertTrue(app.staticTexts["书灯测试样书"].firstMatch.waitForExistence(timeout: 20), "刚存的高亮没进笔记页")
         snap("08-notes-after-highlight")
 
@@ -503,7 +551,7 @@ final class ShudengUITests: XCTestCase {
         app.buttons["白"].tap()
         app.buttons["完成"].tap()
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 10), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 10), "关闭阅读器没有回到书库")
     }
 
     /// 选中 → 翻译、选中 → 写笔记、笔记页跳回原文。
@@ -547,9 +595,9 @@ final class ShudengUITests: XCTestCase {
         snap("10-after-save")
 
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 10), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 10), "关闭阅读器没有回到书库")
         app.tabBars.buttons["笔记"].tap()
-        XCTAssertTrue(app.navigationBars["笔记"].waitForExistence(timeout: 20), "笔记页没加载")
+        XCTAssertTrue(waitForNotes(timeout: 20), "笔记页没加载")
         XCTAssertTrue(app.staticTexts["这段要回头看"].firstMatch.waitForExistence(timeout: 20), "刚写的笔记没进笔记页")
         snap("10-notes-with-note")
 
@@ -561,7 +609,7 @@ final class ShudengUITests: XCTestCase {
     /// 我的 → 每个设置入口都要能打开、能返回。
     func test11ProfileSettingsScreens() throws {
         app.tabBars.buttons["我的"].tap()
-        XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 20), "我的页没加载")
+        XCTAssertTrue(waitForProfile(timeout: 20), "我的页没加载")
         snap("11-profile")
 
         // 字号 / 行距 / 朗读语速都搬进了阅读器里的「阅读设置」，这里只剩全 App 的几项。
@@ -580,7 +628,7 @@ final class ShudengUITests: XCTestCase {
             let back = app.navigationBars[title].buttons.firstMatch
             XCTAssertTrue(back.waitForExistence(timeout: 5), "「\(title)」没有返回按钮")
             back.tap()
-            XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 10), "从「\(title)」没回到我的")
+            XCTAssertTrue(waitForProfile(timeout: 10), "从「\(title)」没回到我的")
         }
 
         // 深色外观也要能看：切过去截图，再切回跟随系统
@@ -590,7 +638,7 @@ final class ShudengUITests: XCTestCase {
         snap("11-dark-appearance")
         app.buttons["跟随系统"].firstMatch.tap()
         app.navigationBars["外观"].buttons.firstMatch.tap()
-        XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 10), "外观页没返回")
+        XCTAssertTrue(waitForProfile(timeout: 10), "外观页没返回")
 
         // 最后一行的「关于书灯」不能被浮动标签栏压住点不到
         app.swipeUp()
@@ -600,7 +648,7 @@ final class ShudengUITests: XCTestCase {
 
     /// 书库：搜索、筛选、排序都要能用，且不能把书弄丢。
     func test12LibrarySearchFilterAndSort() throws {
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 30), "书库没加载")
+        XCTAssertTrue(waitForLibrary(timeout: 30), "书库没加载")
         let book = app.buttons.matching(identifier: "library.book").firstMatch
         XCTAssertTrue(book.waitForExistence(timeout: 30), "书库里没有书")
 
@@ -628,30 +676,34 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(book.waitForExistence(timeout: 10), "换排序后书没了")
         snap("12-sorted-by-title")
 
-        // 先把样书拖到「在读」（50%），筛选才有稳定预期
-        try openFirstBook()
+        // 先把样书读一页，让它进「在读」，筛选才有稳定预期
+        // （底栏的进度滑杆已经撤掉了，翻页就是唯一会写进度的动作）。
+        // 拿中文样书来验：英文样书可能已经被别的用例读到 100%，那样它本来就该出现在「读完」里。
+        let openedTitle = "书灯测试样书"
+        try openBook(titled: openedTitle)
         XCTAssertTrue(app.staticTexts["reader.progress"].waitForExistence(timeout: 40), "阅读器没有渲染出进度")
-        let slider = app.sliders["reader.progressSlider"]
-        XCTAssertTrue(slider.waitForExistence(timeout: 10), "进度条没出现")
-        slider.adjust(toNormalizedSliderPosition: 0.5)
-        usleep(1_500_000)
+        app.swipeLeft()
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 10), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 10), "关闭阅读器没有回到书库")
+        // 只盯刚读过的那本：书库里还有别的书（未读的、早已读完的），不能拿「一本都没有」当预期。
+        let opened = app.buttons
+            .matching(identifier: "library.book")
+            .matching(NSPredicate(format: "label BEGINSWITH %@ AND label CONTAINS %@", openedTitle, "已读"))
+            .firstMatch
+        XCTAssertTrue(opened.waitForExistence(timeout: 15), "读过之后书库没把这本书标成在读")
 
-        // 筛选：在读的书只能出现在「在读 / 全部」里
+        // 筛选：读过的那本只能出现在「在读 / 全部」里
+        let openedRow = app.buttons
+            .matching(identifier: "library.book")
+            .matching(NSPredicate(format: "label BEGINSWITH %@", openedTitle))
+            .firstMatch
         app.buttons["未读"].firstMatch.tap()
-        XCTAssertFalse(
-            app.buttons.matching(identifier: "library.book").firstMatch.waitForExistence(timeout: 2),
-            "「未读」筛选还把在读的书列出来了"
-        )
+        XCTAssertFalse(openedRow.waitForExistence(timeout: 3), "「未读」筛选把在读的书列出来了")
         snap("12-filter-unread")
         app.buttons["读完"].firstMatch.tap()
-        XCTAssertFalse(
-            app.buttons.matching(identifier: "library.book").firstMatch.waitForExistence(timeout: 2),
-            "「读完」筛选把只读了一半的书列出来了"
-        )
+        XCTAssertFalse(openedRow.waitForExistence(timeout: 3), "「读完」筛选把只读了一半的书列出来了")
         app.buttons["在读"].firstMatch.tap()
-        XCTAssertTrue(book.waitForExistence(timeout: 10), "「在读」筛选把样书漏掉了")
+        XCTAssertTrue(opened.waitForExistence(timeout: 10), "「在读」筛选把刚读过的书漏掉了")
         snap("12-filter-reading")
         app.buttons["全部"].firstMatch.tap()
         XCTAssertTrue(book.waitForExistence(timeout: 10), "切回「全部」书没了")
@@ -668,10 +720,10 @@ final class ShudengUITests: XCTestCase {
         app.buttons["reader.highlight.blue"].tap()
         XCTAssertTrue(app.staticTexts["已高亮"].waitForExistence(timeout: 12), "高亮没有保存")
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 10), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 10), "关闭阅读器没有回到书库")
 
         app.tabBars.buttons["笔记"].tap()
-        XCTAssertTrue(app.navigationBars["笔记"].waitForExistence(timeout: 20), "笔记页没加载")
+        XCTAssertTrue(waitForNotes(timeout: 20), "笔记页没加载")
         let exportMenu = app.buttons["notes.export"]
         XCTAssertTrue(exportMenu.waitForExistence(timeout: 10), "笔记页没有导出入口")
         XCTAssertTrue(exportMenu.isEnabled, "有高亮了导出还不可用")
@@ -695,10 +747,10 @@ final class ShudengUITests: XCTestCase {
         app.swipeLeft()
         Thread.sleep(forTimeInterval: 3)
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 10), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 10), "关闭阅读器没有回到书库")
 
         app.tabBars.buttons["我的"].tap()
-        XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 10), "我的页没加载")
+        XCTAssertTrue(waitForProfile(timeout: 10), "我的页没加载")
         app.staticTexts["阅读统计"].firstMatch.tap()
         XCTAssertTrue(app.navigationBars["阅读统计"].waitForExistence(timeout: 15), "统计页没打开")
         XCTAssertTrue(app.staticTexts["今天"].waitForExistence(timeout: 30), "统计没加载出来")
@@ -785,7 +837,7 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(fresh.buttons["onboarding.start"].exists, "点了一下引导页就没了")
         fresh.buttons["onboarding.start"].tap()
         XCTAssertTrue(
-            fresh.navigationBars["书库"].waitForExistence(timeout: 30),
+            waitForLibrary(fresh, timeout: 30),
             "点开始使用后没落在书库（多半是引导页没挡住下面的 Tab）"
         )
         XCTAssertFalse(fresh.buttons["onboarding.start"].exists, "点了开始使用引导页还在")
@@ -796,7 +848,7 @@ final class ShudengUITests: XCTestCase {
         let relaunch = XCUIApplication()
         applySimulatorEnvironment(to: relaunch)
         relaunch.launch()
-        XCTAssertTrue(relaunch.navigationBars["书库"].waitForExistence(timeout: 30), "第二次启动书库没出来")
+        XCTAssertTrue(waitForLibrary(relaunch, timeout: 30), "第二次启动书库没出来")
         XCTAssertFalse(
             relaunch.buttons["onboarding.start"].waitForExistence(timeout: 6),
             "第二次启动又弹引导页了"
@@ -811,24 +863,20 @@ final class ShudengUITests: XCTestCase {
         // 整章正文是阅读器里异步抽的（思维导图要用），等它抽完再离开。
         Thread.sleep(forTimeInterval: 2.5)
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 10), "没回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 10), "没回到书库")
 
         app.tabBars.buttons["AI"].tap()
-        XCTAssertTrue(app.buttons["chat.newThread"].waitForExistence(timeout: 15), "AI 会话列表没加载")
+        XCTAssertTrue(app.buttons["chat.newThread"].waitForExistence(timeout: 15), "AI 历史列表没加载")
+        // 加号直接进新对话，避免和已有历史混在一起。
         app.buttons["chat.newThread"].tap()
+        XCTAssertTrue(app.textFields["chat.input"].waitForExistence(timeout: 10), "新对话没打开")
+        Thread.sleep(forTimeInterval: 0.6)
+
         let skills = app.buttons["chat.skills"]
         XCTAssertTrue(skills.waitForExistence(timeout: 20), "技能菜单没出现")
         let skillsDeadline = Date().addingTimeInterval(20)
         while !skills.isEnabled, Date() < skillsDeadline { usleep(200_000) }
         XCTAssertTrue(skills.isEnabled, "技能列表没从 core 里读出来")
-
-        // 新开一段对话，避免和已有历史混在一起。
-        app.buttons["chat.threads"].tap()
-        XCTAssertTrue(app.buttons["chat.newThread"].waitForExistence(timeout: 10), "会话列表没打开")
-        app.buttons["chat.newThread"].tap()
-        // 会话列表是 sheet，收起要一点时间；这时点导航栏按钮会被动画吞掉。
-        XCTAssertTrue(app.textFields["chat.input"].waitForExistence(timeout: 10), "新对话没打开")
-        Thread.sleep(forTimeInterval: 0.6)
 
         // 1. 技能：点「智能摘要」直接按当前阅读位置开问；mock 回显技能名，说明技能 prompt 真的注入了。
         let summary = chooseSkill("chat.skill.summarizer", "智能摘要")
@@ -868,6 +916,62 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(input.waitForExistence(timeout: 10), "导图关掉后没回到对话")
     }
 
+    /// AI 栏重做后的主流程：加号直接进新对话，输入框上方的 chip 把这段对话挂到一本书上，
+    /// 发完消息回到历史列表，这段对话要归在那本书的分组里。
+    func test18NewChatBindsBookFromChip() throws {
+        // 不需要开阅读器：书库里的样书本来就在，选书面板直接能读到。
+        XCTAssertTrue(app.tabBars.buttons["AI"].waitForExistence(timeout: 40), "主界面没加载")
+
+        app.tabBars.buttons["AI"].tap()
+        let compose = app.buttons["chat.newThread"]
+        XCTAssertTrue(compose.waitForExistence(timeout: 15), "AI 历史列表没加载")
+        compose.tap()
+
+        let chip = app.buttons["chat.bookChip"]
+        XCTAssertTrue(chip.waitForExistence(timeout: 10), "新对话没有上下文 chip")
+        XCTAssertTrue(chip.label.contains("临时对话"), "新对话默认该是临时对话，实际：\(chip.label)")
+        snap("18-new-chat-temp")
+
+        chip.tap()
+        let bookRow = app.buttons.matching(identifier: "chat.bookPicker.book").firstMatch
+        XCTAssertTrue(bookRow.waitForExistence(timeout: 10), "选书面板里一本书都没有")
+        let pickedTitle = bookRow.label
+        XCTAssertFalse(pickedTitle.isEmpty, "选书面板里的书名读不出来")
+        bookRow.tap()
+        let chipDeadline = Date().addingTimeInterval(10)
+        while chip.label.contains("临时对话"), Date() < chipDeadline { usleep(200_000) }
+        XCTAssertFalse(chip.label.contains("临时对话"), "选完书 chip 还写着临时对话")
+        snap("18-new-chat-bound")
+
+        let token = "b" + String(UUID().uuidString.prefix(5))
+        let input = app.textFields["chat.input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10), "输入框没出现")
+        input.tap()
+        input.typeText("挂书测试\(token)")
+        XCTAssertTrue(app.buttons["chat.send"].isEnabled, "有内容时发送键应该可用")
+        app.buttons["chat.send"].tap()
+        let bubble = app.descendants(matching: .any).matching(identifier: "chat.assistantBubble").firstMatch
+        XCTAssertTrue(bubble.waitForExistence(timeout: 60), "助手气泡没出现")
+
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons["chat.newThread"].waitForExistence(timeout: 10), "没回到 AI 历史列表")
+        let row = app.buttons.matching(identifier: "chat.threadRow")
+            .matching(NSPredicate(format: "label CONTAINS %@", token))
+            .firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 15), "挂了书的对话没进历史列表")
+        XCTAssertTrue(
+            app.staticTexts[pickedTitle].waitForExistence(timeout: 10),
+            "历史列表里没有这本书的分组头：\(pickedTitle)"
+        )
+        snap("18-thread-grouped")
+
+        // 分组排序：菜单里能切正序 / 倒序。
+        app.buttons["chat.sort"].tap()
+        let descending = app.buttons["名称 Z → A"]
+        XCTAssertTrue(descending.waitForExistence(timeout: 6), "排序菜单没出来")
+        descending.tap()
+    }
+
     /// 打开「技能」菜单并把某一项点出来。
     /// 菜单项的无障碍标识是技能 id（SwiftUI 默认会拿 SF Symbol 名当标识，App 里已显式覆盖）；
     /// 菜单弹层本身会盖住工具栏，菜单开着的时候再点按钮会点到菜单第一项，所以只在没开时才点。
@@ -894,7 +998,7 @@ final class ShudengUITests: XCTestCase {
     /// 返回设置页显示的状态文案（「可用」/「可用（只支持英文内容）」）。
     @discardableResult
     private func assertVectorModelAvailable() throws -> String {
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 30), "书库没加载")
+        XCTAssertTrue(waitForLibrary(timeout: 30), "书库没加载")
 
         // 「我的 → 语义检索」：端侧向量模型得是「可用」，否则这台机器跑不了语义索引。
         app.tabBars.buttons["我的"].tap()
@@ -969,11 +1073,11 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(chapter.waitForExistence(timeout: 30), "没有跳到命中的那一章")
         let percent = app.staticTexts["reader.percent"]
         XCTAssertTrue(percent.waitForExistence(timeout: 10), "阅读器没有显示进度")
-        let value = Int(percent.label.replacingOccurrences(of: "%", with: "")) ?? 0
+        let value = Int(percent.label.split(whereSeparator: { !$0.isNumber }).first.map(String.init) ?? "") ?? 0
         XCTAssertGreaterThan(value, 40, "回跳后进度应该靠后（第五章），实际 \(percent.label)")
         snap("18-jump-to-passage")
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 10), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 10), "关闭阅读器没有回到书库")
 
         // 对话里也要带上检索到的原文：模拟端点回固定文案，界面要显示引用提示。
         dismissKeyboard(in: app)
@@ -1028,7 +1132,7 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["reader.progress"].waitForExistence(timeout: 60), "点检索结果没有打开阅读器")
         XCTAssertTrue(app.staticTexts["reader.percent"].exists, "阅读器没有显示进度")
         app.buttons["reader.close"].tap()
-        XCTAssertTrue(app.navigationBars["书库"].waitForExistence(timeout: 15), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(timeout: 15), "关闭阅读器没有回到书库")
         clearLibrarySearch(in: app)
         dismissKeyboard(in: app)
     }
@@ -1056,7 +1160,7 @@ final class ShudengUITests: XCTestCase {
         app = target
         target.launch()
 
-        XCTAssertTrue(target.navigationBars["书库"].waitForExistence(timeout: 30), "书库没有加载")
+        XCTAssertTrue(waitForLibrary(target, timeout: 30), "书库没有加载")
         let sampleTitle = "Shudeng Test Book"
         XCTAssertTrue(
             englishSample(in: target, title: sampleTitle).waitForExistence(timeout: 60),
@@ -1107,7 +1211,7 @@ final class ShudengUITests: XCTestCase {
         XCTAssertGreaterThan(value, 40, "回跳后进度应该靠后（第五章），实际 \(percent.label)")
         snap("20-jump-to-passage-en")
         target.buttons["reader.close"].tap()
-        XCTAssertTrue(target.navigationBars["书库"].waitForExistence(timeout: 10), "关闭阅读器没有回到书库")
+        XCTAssertTrue(waitForLibrary(target, timeout: 10), "关闭阅读器没有回到书库")
         clearLibrarySearch(in: target)
         dismissKeyboard(in: target)
 
@@ -1153,7 +1257,7 @@ final class ShudengUITests: XCTestCase {
         first.launchEnvironment["SHUDENG_SEED_SAMPLE_BOOK_EN"] = "1"
         app = first
         first.launch()
-        XCTAssertTrue(first.navigationBars["书库"].waitForExistence(timeout: 30), "书库没有加载")
+        XCTAssertTrue(waitForLibrary(first, timeout: 30), "书库没有加载")
         XCTAssertTrue(
             englishSample(in: first, title: sampleTitle).waitForExistence(timeout: 60),
             "英文样书没有导进书库"
@@ -1171,7 +1275,7 @@ final class ShudengUITests: XCTestCase {
         applySimulatorEnvironment(to: second)
         app = second
         second.launch()
-        XCTAssertTrue(second.navigationBars["书库"].waitForExistence(timeout: 30), "重启后书库没有加载")
+        XCTAssertTrue(waitForLibrary(second, timeout: 30), "重启后书库没有加载")
         XCTAssertFalse(
             englishSample(in: second, title: sampleTitle).waitForExistence(timeout: 15),
             "重启之后删掉的书又回来了"
@@ -1194,14 +1298,14 @@ final class ShudengUITests: XCTestCase {
         target.launchEnvironment["SHUDENG_SEED_SAMPLE_PDF"] = "1"
         app = target
         target.launch()
-        XCTAssertTrue(target.navigationBars["书库"].waitForExistence(timeout: 30), "书库没有加载")
+        XCTAssertTrue(waitForLibrary(target, timeout: 30), "书库没有加载")
 
         // 上一轮跑完会留着进度：先删干净，让这次从「没读过」的状态开始（不然会直接续读到上次那一页）。
         clearLibrarySearch(in: target)
         _ = deleteEnglishSample(in: target, title: sampleTitle)
         target.terminate()
         target.launch()
-        XCTAssertTrue(target.navigationBars["书库"].waitForExistence(timeout: 30), "书库没有加载")
+        XCTAssertTrue(waitForLibrary(target, timeout: 30), "书库没有加载")
 
         let cell = bookCover(in: target, title: sampleTitle)
         XCTAssertTrue(cell.waitForExistence(timeout: 60), "PDF 样书没有导进书库")
@@ -1212,48 +1316,48 @@ final class ShudengUITests: XCTestCase {
 
         let progress = target.staticTexts["reader.progress"]
         XCTAssertTrue(progress.waitForExistence(timeout: 60), "PDF 阅读器没有渲染出来")
-        var firstPage = progress.label
+        var firstPage = footerPages(target)
         for _ in 0..<40 {
-            firstPage = progress.label
-            if firstPage == "1 / 3" { break }
+            firstPage = footerPages(target)
+            if firstPage?.current == 1 { break }
             usleep(500_000)
         }
         // 打开就该停在第 1 页：以前 foliate 的 init 会先 next() 一次，PDF 一开就在最后一页。
-        XCTAssertEqual(firstPage, "1 / 3", "PDF 打开的位置不对，页脚是：\(firstPage)")
+        XCTAssertEqual(firstPage?.current, 1, "PDF 打开的位置不对，页脚是：\(progress.label)")
         XCTAssertTrue(target.staticTexts["reader.percent"].exists, "PDF 没有显示阅读百分比")
         snap("22-pdf-first-page", of: target)
 
         target.swipeLeft()
         var secondPage = firstPage
         for _ in 0..<20 {
-            secondPage = progress.label
-            if secondPage == "2 / 3" { break }
+            secondPage = footerPages(target)
+            if secondPage?.current == 2 { break }
             usleep(500_000)
         }
-        XCTAssertEqual(secondPage, "2 / 3", "PDF 左滑之后应该到第 2 页，实际：\(secondPage)")
+        XCTAssertEqual(secondPage?.current, 2, "PDF 左滑之后应该到第 2 页，实际：\(progress.label)")
         snap("22-pdf-second-page", of: target)
 
         target.swipeRight()
         var backPage = secondPage
         for _ in 0..<20 {
-            backPage = progress.label
-            if backPage == "1 / 3" { break }
+            backPage = footerPages(target)
+            if backPage?.current == 1 { break }
             usleep(500_000)
         }
-        XCTAssertEqual(backPage, "1 / 3", "PDF 右滑之后应该回到第 1 页，实际：\(backPage)")
+        XCTAssertEqual(backPage?.current, 1, "PDF 右滑之后应该回到第 1 页，实际：\(progress.label)")
 
         // 停在「第 2 页」再退出：续读要落回这一页，才是用户要的行为。
         target.swipeLeft()
         var leavePage = backPage
         for _ in 0..<20 {
-            leavePage = progress.label
-            if leavePage == "2 / 3" { break }
+            leavePage = footerPages(target)
+            if leavePage?.current == 2 { break }
             usleep(500_000)
         }
-        XCTAssertEqual(leavePage, "2 / 3", "PDF 左滑之后应该到第 2 页，实际：\(leavePage)")
+        XCTAssertEqual(leavePage?.current, 2, "PDF 左滑之后应该到第 2 页，实际：\(progress.label)")
 
         target.buttons["reader.close"].tap()
-        XCTAssertTrue(target.navigationBars["书库"].waitForExistence(timeout: 15), "关闭 PDF 没有回到书库")
+        XCTAssertTrue(waitForLibrary(target, timeout: 15), "关闭 PDF 没有回到书库")
 
         // 关掉之后要记住读到哪：PDF 以前一律记成 0%，重进又从第一页开始。
         let card = bookCover(in: target, title: sampleTitle)
@@ -1277,7 +1381,7 @@ final class ShudengUITests: XCTestCase {
         }
         XCTAssertEqual(resumed, "2 / 3", "重开 PDF 没有回到上次那一页，实际：\(resumed)")
         target.buttons["reader.close"].tap()
-        XCTAssertTrue(target.navigationBars["书库"].waitForExistence(timeout: 15), "关闭 PDF 没有回到书库")
+        XCTAssertTrue(waitForLibrary(target, timeout: 15), "关闭 PDF 没有回到书库")
     }
 
     /// 长按书封删掉英文样书；返回 true 表示删完（或者本来就没有）。

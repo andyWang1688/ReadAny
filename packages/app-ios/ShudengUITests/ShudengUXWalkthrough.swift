@@ -89,7 +89,7 @@ final class ShudengUXWalkthrough: XCTestCase {
         } else {
             miss("首启引导页没出现")
         }
-        _ = app.navigationBars["书库"].waitForExistence(timeout: 30)
+        _ = app.buttons["library.import"].waitForExistence(timeout: 30)
         snap("03-library-just-entered")
         if app.buttons.matching(identifier: "library.book").firstMatch.waitForExistence(timeout: 60) {
             pause(2)
@@ -104,7 +104,8 @@ final class ShudengUXWalkthrough: XCTestCase {
             firstBook.press(forDuration: 1.2)
             pause(1.2)
             snap("05-book-longpress-menu")
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+            // 点顶部状态栏只会滚回顶部、关不掉长按菜单；点菜单下方的空白处才会收起。
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.80)).tap()
             pause()
         }
 
@@ -314,7 +315,7 @@ final class ShudengUXWalkthrough: XCTestCase {
         }
         pause()
         tap(app.buttons["reader.close"], 8, "关闭阅读器")
-        _ = app.navigationBars["书库"].waitForExistence(timeout: 12)
+        _ = app.buttons["library.import"].waitForExistence(timeout: 12)
         pause()
         snap("28-library-after-reading")
 
@@ -322,15 +323,10 @@ final class ShudengUXWalkthrough: XCTestCase {
         tap(app.tabBars.buttons["AI"], 10, "AI Tab")
         pause(1.5)
         snap("29-ai-tab")
-        tap(app.buttons["chat.threads"], 10, "会话列表")
-        if app.buttons["chat.newThread"].waitForExistence(timeout: 10) {
-            pause()
-            snap("30-thread-list")
-            app.buttons["chat.newThread"].tap()
-            pause(1.5)
-        } else {
-            snap("30-thread-list")
-        }
+        // 加号直接进新对话（历史就是 AI 栏首屏，不再有单独的会话 sheet）。
+        tap(app.buttons["chat.newThread"], 10, "新对话")
+        pause(1.5)
+        snap("30-new-chat")
         if app.textFields["chat.input"].waitForExistence(timeout: 12) {
             app.textFields["chat.input"].tap()
             app.textFields["chat.input"].typeText("暗号：mermaid")
@@ -368,7 +364,7 @@ final class ShudengUXWalkthrough: XCTestCase {
 
         // ---------- 5. 笔记 ----------
         tap(app.tabBars.buttons["笔记"], 10, "笔记 Tab")
-        _ = app.navigationBars["笔记"].waitForExistence(timeout: 20)
+        _ = app.buttons["notes.export"].waitForExistence(timeout: 20)
         pause(1.5)
         snap("35-notes")
         if app.buttons["notes.export"].waitForExistence(timeout: 8) {
@@ -383,7 +379,7 @@ final class ShudengUXWalkthrough: XCTestCase {
 
         // ---------- 6. 我的 / 统计 / 设置 ----------
         tap(app.tabBars.buttons["我的"], 10, "我的 Tab")
-        _ = app.navigationBars["我的"].waitForExistence(timeout: 20)
+        _ = app.buttons["profile.appearance"].waitForExistence(timeout: 20)
         pause()
         snap("37-profile")
 
@@ -420,7 +416,7 @@ final class ShudengUXWalkthrough: XCTestCase {
             miss("阅读统计没打开")
         }
 
-        for title in ["字体与排版", "外观", "朗读", "AI 设置", "语义检索", "关于书灯"] {
+        for title in ["外观", "AI 设置", "语义检索", "关于书灯"] {
             tap(app.staticTexts[title].firstMatch, 8, title)
             let bar = app.navigationBars[title]
             if bar.waitForExistence(timeout: 15) {
@@ -443,7 +439,7 @@ final class ShudengUXWalkthrough: XCTestCase {
                 miss("\(title) 没打开")
                 snap("42-missing-\(title)")
             }
-            if !app.navigationBars["我的"].waitForExistence(timeout: 8) {
+            if !app.buttons["profile.appearance"].waitForExistence(timeout: 8) {
                 log("从 \(title) 返回后不在「我的」页")
                 break
             }
@@ -509,7 +505,7 @@ final class ShudengUXWalkthrough: XCTestCase {
                 Thread.sleep(forTimeInterval: 20)
                 snap("50-index-progress")
             } else if app.buttons["重建语义索引"].exists {
-                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.80)).tap()
                 pause()
             }
         }
