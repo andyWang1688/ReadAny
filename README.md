@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/ios/app-icon.png" alt="Shudeng app icon" width="120" height="120">
+</p>
+
 <h1 align="center">Shudeng · 书灯</h1>
 
 <p align="center">
