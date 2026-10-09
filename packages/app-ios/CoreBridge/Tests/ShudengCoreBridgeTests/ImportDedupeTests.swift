@@ -59,6 +59,111 @@ final class ImportDedupeTests: XCTestCase {
         return try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
     }
 
+    func testFailedImportCleansOnlyItsFilesAndCanRetry() throws {
+        let (runtime, root) = try makeRuntime()
+        let failedPath = try copyFixture(named: "failed.epub", into: root)
+        let unrelated = try copyFixture(named: "unrelated.epub", into: root)
+        let promise = try XCTUnwrap(runtime.evaluate("""
+        (async () => {
+          await ShudengApp.bootstrap();
+          const query = __nativeDbQuery;
+          __nativeDbQuery = (path, sql, params) => sql.startsWith('INSERT INTO books ')
+            ? JSON.stringify({ error: 'SQLITE_BUSY fixture import' }) : query(path, sql, params);
+          let error;
+          try { await ShudengApp.importBook({ id: 'failed', path: '\(failedPath)', format: 'epub' }); } catch (e) { error = String(e); }
+          __nativeDbQuery = query;
+          return JSON.stringify({ error, count: JSON.parse(await ShudengApp.listBooks()).length });
+        })()
+        """))
+        let raw = try XCTUnwrap(runtime.wait(for: promise, timeout: 30).toString())
+        let output = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        XCTAssertTrue((output["error"] as? String)?.contains("SQLITE_BUSY") == true)
+        XCTAssertEqual(output["count"] as? Int, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(failedPath).path))
+        let covers = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("covers").path)) ?? []
+        XCTAssertFalse(covers.contains { $0.hasPrefix("failed.") })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(unrelated).path))
+        let retryPath = try copyFixture(named: "retry.epub", into: root)
+        let retry = try importBook(runtime, id: "retried", path: retryPath)
+        XCTAssertEqual(retry["duplicate"] as? Bool, false)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(retryPath).path))
+    }
+
+    func testFailedMetadataReadDoesNotAccumulateBookCopies() throws {
+        let (runtime, root) = try makeRuntime()
+        for index in 1...2 {
+            let relative = "books/invalid-\(index).epub"
+            let file = root.appendingPathComponent(relative)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("invalid epub".utf8).write(to: file)
+            let promise = try XCTUnwrap(runtime.evaluate("""
+            (async () => {
+              const nativeFs = __nativeFs;
+              __nativeFs = (op, path, payload) => op === 'read' && path === '\(relative)'
+                ? JSON.stringify({ error: 'fixture metadata read failure' })
+                : nativeFs(op, path, payload);
+              let error;
+              try { await ShudengApp.importBook({ id: 'invalid-\(index)', path: '\(relative)', format: 'epub' }); }
+              catch (e) { error = String(e); }
+              __nativeFs = nativeFs;
+              return error || '';
+            })()
+            """))
+            let error = try XCTUnwrap(runtime.wait(for: promise, timeout: 30).toString())
+            XCTAssertTrue(error.contains("fixture metadata read failure"))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        }
+    }
+
+    func testPreflightFailureCleansCopyAndExistingBookConflictPreservesFile() throws {
+        let (runtime, root) = try makeRuntime()
+        let failedPath = try copyFixture(named: "preflight.epub", into: root)
+        let promise = try XCTUnwrap(runtime.evaluate("""
+        (async () => {
+          await ShudengApp.bootstrap();
+          const query = __nativeDbQuery;
+          __nativeDbQuery = (path, sql, params) => sql.includes('FROM books WHERE id = ?')
+            ? JSON.stringify({ error: 'SQLITE_BUSY preflight' }) : query(path, sql, params);
+          let error;
+          try { await ShudengApp.importBook({ id: 'preflight', path: '\(failedPath)', format: 'epub' }); } catch (e) { error = String(e); }
+          __nativeDbQuery = query;
+          return error || '';
+        })()
+        """))
+        let error = try XCTUnwrap(runtime.wait(for: promise, timeout: 30).toString())
+        XCTAssertTrue(error.contains("SQLITE_BUSY preflight"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(failedPath).path))
+        let existingPath = try copyFixture(named: "existing.epub", into: root)
+        _ = try importBook(runtime, id: "existing", path: existingPath)
+        let conflict = try XCTUnwrap(runtime.evaluate("""
+        (async () => {
+          try { await ShudengApp.importBook({ id: 'existing', path: '\(existingPath)', format: 'epub' }); return ''; }
+          catch (e) { return String(e); }
+        })()
+        """))
+        let conflictError = try XCTUnwrap(runtime.wait(for: conflict, timeout: 30).toString())
+        XCTAssertTrue(conflictError.contains("书籍 ID 已存在"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(existingPath).path))
+    }
+
+    func testWaitTimeoutDoesNotDeleteFilesBeforeDelayedCommit() throws {
+        let (runtime, root) = try makeRuntime()
+        let relative = try copyFixture(named: "delayed.epub", into: root)
+        let promise = try XCTUnwrap(runtime.evaluate("""
+        (async () => {
+          await new Promise(resolve => setTimeout(resolve, 80));
+          return ShudengApp.importBook({ id: 'delayed', path: '\(relative)', format: 'epub' });
+        })()
+        """))
+        XCTAssertThrowsError(try runtime.wait(for: promise, timeout: 0.01))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(relative).path))
+        let raw = try XCTUnwrap(runtime.wait(for: promise, timeout: 30).toString())
+        XCTAssertTrue(raw.contains("delayed"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(relative).path))
+        let count = try XCTUnwrap(runtime.wait(for: XCTUnwrap(runtime.evaluate("ShudengApp.bookCount()")), timeout: 10).toString())
+        XCTAssertEqual(count, "1")
+    }
+
     /// 宿主指纹原语要和 CryptoKit 的 SHA-256 一致（导入去重全靠它）。
     func testFileDigestMatchesSHA256() throws {
         let (runtime, root) = try makeRuntime()

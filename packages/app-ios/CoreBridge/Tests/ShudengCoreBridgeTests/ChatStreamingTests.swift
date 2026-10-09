@@ -37,6 +37,35 @@ final class ChatStreamingTests: XCTestCase {
         }
     }
 
+    func testMessageRetryUsesStableIDAndRejectsConflictingContent() throws {
+        let runtime = try makeRuntime()
+        let promise = try XCTUnwrap(runtime.evaluate("""
+        (async () => {
+          const thread = JSON.parse(await ShudengApp.createThread({ title: 'retry' }));
+          const message = { id: 'stable-reply', threadId: thread.id, role: 'assistant', content: 'saved answer' };
+          const db = await ReadAnyCore.db.getDB();
+          await db.execute("CREATE TEMP TRIGGER reject_reply BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'fixture write failure'); END");
+          let rejected = false;
+          try { await ShudengApp.appendMessage(message); } catch { rejected = true; }
+          await db.execute('DROP TRIGGER reject_reply');
+          await ShudengApp.appendMessage(message);
+          const receipt = JSON.parse(await ShudengApp.appendMessage(message));
+          let conflictRejected = false;
+          try { await ShudengApp.appendMessage({ ...message, content: 'different' }); } catch { conflictRejected = true; }
+          const loaded = JSON.parse(await ShudengApp.loadThread({ id: thread.id }));
+          return JSON.stringify({ rejected, conflictRejected, receipt, messages: loaded.messages });
+        })()
+        """))
+        let raw = try XCTUnwrap(runtime.wait(for: promise, timeout: 30).toString())
+        let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        XCTAssertEqual(result["rejected"] as? Bool, true)
+        XCTAssertEqual(result["conflictRejected"] as? Bool, true)
+        XCTAssertEqual((result["receipt"] as? [String: Any])?["id"] as? String, "stable-reply")
+        let messages = try XCTUnwrap(result["messages"] as? [[String: Any]])
+        XCTAssertEqual(messages.count, 1)
+        XCTAssertEqual(messages.first?["content"] as? String, "saved answer")
+    }
+
     /// 模型偶尔会把工具调用标记当正文吐出来（DeepSeek 的 ｜DSML｜ 最常见，真机上就是「乱码」）：
     /// 书灯不执行工具，这类 markup 不能显示给读者；整段都是 markup 时要换成一句人话。
     func testChatHidesToolCallMarkup() throws {
@@ -117,7 +146,45 @@ final class ChatStreamingTests: XCTestCase {
         XCTAssertEqual(root?["grouped"] as? Int, 1, "按书查会话查不到这一段：\(json)")
     }
 
-    /// 选中翻译走的是非流式 chat/completions：端点必须能一次把整段 JSON 读回来。
+    /// 公共翻译 API 必须遵循配置服务商的协议，而不是把 Anthropic 当作 OpenAI。
+    func testTranslateUsesAnthropicProtocol() throws {
+        let runtime = try makeRuntime()
+        let promise = try XCTUnwrap(runtime.evaluate(
+            """
+            (async () => {
+              let request;
+              __nativeFetchStream = (url, method, headers, body, id, head, chunk, finish) => {
+                request = { url, headers: JSON.parse(headers), body: JSON.parse(body) };
+                const valid = url.endsWith('/v1/messages') && request.headers['x-api-key'] === 'fixture-key';
+                head(valid ? 200 : 404, JSON.stringify({ 'content-type': 'application/json' }));
+                chunk(JSON.stringify(valid ? {
+                  id: 'fixture', type: 'message', role: 'assistant', model: 'fixture-model',
+                  content: [{ type: 'text', text: 'fixture translation' }],
+                  stop_reason: 'end_turn', stop_sequence: null,
+                  usage: { input_tokens: 1, output_tokens: 2 },
+                } : { error: { type: 'not_found_error', message: 'Wrong provider protocol' } }));
+                finish(null);
+              };
+              const result = JSON.parse(await ShudengApp.translate({
+                provider: 'anthropic', baseUrl: 'https://anthropic.fixture',
+                apiKey: 'fixture-key', model: 'fixture-model', text: '你好', targetLang: 'en',
+              }));
+              return JSON.stringify({ request, result });
+            })()
+            """
+        ))
+        let raw = try XCTUnwrap(runtime.wait(for: promise, timeout: 15).toString())
+        let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any])
+        let result = try XCTUnwrap(json["result"] as? [String: Any])
+        XCTAssertEqual(result["translated"] as? String, "fixture translation", raw)
+        let request = try XCTUnwrap(json["request"] as? [String: Any])
+        XCTAssertEqual(request["url"] as? String, "https://anthropic.fixture/v1/messages")
+        let body = try XCTUnwrap(request["body"] as? [String: Any])
+        XCTAssertEqual(body["max_tokens"] as? Int, 2048)
+        XCTAssertEqual(body["temperature"] as? Double, 0.3)
+    }
+
+    /// 选中翻译走的是非流式请求：端点必须能一次把整段 JSON 读回来。
     func testTranslateReturnsWholeAnswer() throws {
         guard let baseURL = ProcessInfo.processInfo.environment["SHUDENG_MOCK_LLM_URL"], !baseURL.isEmpty else {
             throw XCTSkip("未设置 SHUDENG_MOCK_LLM_URL，先启动 scripts/mock-llm-server.mjs")

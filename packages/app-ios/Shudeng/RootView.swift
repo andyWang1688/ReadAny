@@ -2,6 +2,7 @@
 import SwiftUI
 
 struct RootView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var runtime: RuntimeHost
     @EnvironmentObject private var settings: AppSettings
     /// 首次启动看一页引导；跑 UI 测试时用 `-shudeng.onboarded YES` 跳过。
@@ -28,11 +29,13 @@ struct RootView: View {
         .environmentObject(reading)
         .environmentObject(chat)
         .preferredColorScheme(settings.appearance.colorScheme)
+        .safeAreaInset(edge: .top) { readingSaveError }
         .fullScreenCover(isPresented: $reading.isReaderPresented) {
             ReaderScreen()
                 .environmentObject(reading)
                 // 阅读器里的 AI 弹层要用同一段对话；少注入这一层，点 ✨ 会直接闪退。
                 .environmentObject(chat)
+                .safeAreaInset(edge: .top) { readingSaveError }
         }
         .overlay {
             if showOnboarding {
@@ -54,12 +57,28 @@ struct RootView: View {
             withAnimation(.easeOut(duration: 0.3)) { showSplash = false }
             if !onboarded { showOnboarding = true }
         }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background { chat.stop() }
+        }
         .onChange(of: runtime.state) { _, state in
             // Runtime 启动和根视图 task 的先后顺序不固定；状态变化后补一次绑定，
             // 避免启动稍慢时书库 / AI 已显示但第一次加载没有发生。
             guard state == .ready else { return }
             reading.attach(to: runtime)
             chat.attach(to: runtime)
+        }
+    }
+
+    @ViewBuilder private var readingSaveError: some View {
+        if let error = reading.persistenceError {
+            HStack {
+                Text(error).font(.footnote)
+                Spacer()
+                Button("重试保存") { reading.retryPersistence(using: runtime) }
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.15))
+            .accessibilityIdentifier("reading.persistenceError")
         }
     }
 }

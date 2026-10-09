@@ -178,6 +178,17 @@ public final class HostEnvironment {
         }
         context.setObject(query, forKeyedSubscript: "__nativeDbQuery" as NSString)
 
+        let transaction: @convention(block) (String, String) -> String = { [weak self] path, statements in
+            guard let self else { return #"{"error":"host released"}"# }
+            do {
+                try self.database(at: path).transaction(statementsJSON: statements)
+                return "{}"
+            } catch {
+                return Self.jsonString(["error": String(describing: error)])
+            }
+        }
+        context.setObject(transaction, forKeyedSubscript: "__nativeDbTransaction" as NSString)
+
         let close: @convention(block) (String) -> Void = { [weak self] path in
             self?.closeDatabase(at: path)
         }
@@ -214,7 +225,8 @@ public final class HostEnvironment {
                 },
                 onFinish: { [weak self] error in
                     self?.callbackQueue.async {
-                        finishCallback?.call(withArguments: [error.map { String(describing: $0) }])
+                        let result: Any = error.map { String(describing: $0) } as Any? ?? NSNull()
+                        finishCallback?.call(withArguments: [result])
                         self?.streamBridges[taskID] = nil
                         self?.runningTasks[taskID] = nil
                     }

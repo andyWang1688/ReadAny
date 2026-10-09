@@ -18,7 +18,7 @@ final class SQLiteDatabaseTests: XCTestCase {
     /// NOT NULL 约束 → 必须抛错（以前 sqlite3_step 的失败被吞掉，写库失败看起来是成功的）。
     func testInsertViolatingNotNullThrows() throws {
         let (database, _) = try makeDatabase()
-        try database.execute("CREATE TABLE t (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+        _ = try database.execute("CREATE TABLE t (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
 
         XCTAssertThrowsError(try database.execute("INSERT INTO t (id, name) VALUES (?, ?)", ["a", NSNull()])) { error in
             XCTAssertTrue(
@@ -33,9 +33,9 @@ final class SQLiteDatabaseTests: XCTestCase {
     /// 外键约束 → 必须抛错（书签挂在不存在的书上时要报错，而不是静默丢）。
     func testInsertViolatingForeignKeyThrows() throws {
         let (database, _) = try makeDatabase()
-        try database.execute("PRAGMA foreign_keys = ON")
-        try database.execute("CREATE TABLE books (id TEXT PRIMARY KEY)")
-        try database.execute(
+        _ = try database.execute("PRAGMA foreign_keys = ON")
+        _ = try database.execute("CREATE TABLE books (id TEXT PRIMARY KEY)")
+        _ = try database.execute(
             "CREATE TABLE bookmarks (id TEXT PRIMARY KEY, book_id TEXT NOT NULL, cfi TEXT NOT NULL, FOREIGN KEY (book_id) REFERENCES books(id))"
         )
 
@@ -48,7 +48,7 @@ final class SQLiteDatabaseTests: XCTestCase {
     /// 一个字符串里的多条 SQL 要全部执行（core 的迁移里有这种写法）。
     func testMultipleStatementsInOneCall() throws {
         let (database, _) = try makeDatabase()
-        try database.execute("CREATE TABLE m1 (id INTEGER); CREATE TABLE m2 (id INTEGER);")
+        _ = try database.execute("CREATE TABLE m1 (id INTEGER); CREATE TABLE m2 (id INTEGER);")
 
         let rows = try jsonQuery(
             database,
@@ -60,8 +60,8 @@ final class SQLiteDatabaseTests: XCTestCase {
     /// 成功写入仍然返回空 rows，不因为加了错误检查而变脸。
     func testSuccessfulWriteRoundTrip() throws {
         let (database, _) = try makeDatabase()
-        try database.execute("CREATE TABLE t (id TEXT PRIMARY KEY, value INTEGER)")
-        try database.execute("INSERT INTO t (id, value) VALUES (?, ?)", ["a", 7])
+        _ = try database.execute("CREATE TABLE t (id TEXT PRIMARY KEY, value INTEGER)")
+        _ = try database.execute("INSERT INTO t (id, value) VALUES (?, ?)", ["a", 7])
         let rows = try jsonQuery(database, "SELECT id, value FROM t")["rows"] as? [[String: Any]]
         XCTAssertEqual(rows?.count, 1)
         XCTAssertEqual(rows?.first?["value"] as? Int, 7)

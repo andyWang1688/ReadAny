@@ -48,6 +48,7 @@ final class ChatService: ObservableObject {
     @Published private(set) var threads: [ChatThread] = []
     @Published private(set) var isStreaming = false
     @Published var error: String?
+    @Published private(set) var hasUnsavedReply = false
     /// 这一轮回答引用了书里几段原文（书建过语义索引时才有）。
     @Published private(set) var contextNote: String?
     @Published private(set) var activeThreadId: String?
@@ -63,6 +64,35 @@ final class ChatService: ObservableObject {
     private var thinkingStartedAt: Date?
     /// 已经落库的回答 id：用户点「停止」和稍后到达的 done 都走持久化，别插两条。
     private var persistedReplyID: String?
+    private var pendingUser: (threadId: String, message: Message)?
+    private struct PendingReply: Codable, Equatable {
+        let threadId: String
+        let messageId: String
+        let text: String
+
+        var isValid: Bool {
+            !threadId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !messageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+    private var pendingReply: PendingReply?
+    private var pendingReplyBlocked = false
+    private var restoredPendingReply = false
+    private static let pendingReplyFileName = "pending-chat-reply.json"
+    private struct LoadedThread: Decodable {
+        struct Stored: Decodable {
+            let id: String
+            let role: String
+            let content: String
+        }
+
+        let id: String
+        let title: String?
+        let bookId: String?
+        let updatedAt: Double?
+        let messages: [Stored]
+    }
     /// 端点没回应时的看门狗：连续这么长时间一个事件都没有就中断这一轮。
     private static let idleTimeout: TimeInterval = 90
     private var watchdog: Task<Void, Never>?
@@ -76,6 +106,12 @@ final class ChatService: ObservableObject {
         }
         guard runtime.state == .ready else { return }
         refreshThreads(using: runtime)
+        if !isStreaming {
+            restorePendingReply(using: runtime)
+            if pendingReply != nil, !pendingReplyBlocked {
+                persistAssistantReply(using: runtime)
+            }
+        }
         if !loadedInitialThread, messages.isEmpty, let latest = threads.first {
             loadedInitialThread = true
             open(latest, using: runtime)
@@ -86,146 +122,209 @@ final class ChatService: ObservableObject {
 
     func refreshThreads(using runtime: RuntimeHost) {
         guard runtime.state == .ready else { return }
-        let json = runtime.appJSONOr("ShudengApp.listThreads({})", fallback: "[]", timeout: 60)
-        // 一条脏数据不该让整个历史列表消失：逐条解，坏行跳过。
-        guard let rows = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [Any] else {
-            threads = []
-            return
-        }
-        let decoder = JSONDecoder()
-        threads = rows.compactMap { row in
-            guard let data = try? JSONSerialization.data(withJSONObject: row) else { return nil }
-            return try? decoder.decode(ChatThread.self, from: data)
+        do {
+            guard let json = try runtime.appJSON("ShudengApp.listThreads({})", timeout: 60),
+                  let rows = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [Any] else {
+                throw NSError(domain: "ChatPersistence", code: 2)
+            }
+            // 一条脏数据不该让整个历史列表消失：逐条解，坏行跳过。
+            let decoder = JSONDecoder()
+            threads = rows.compactMap { row in
+                guard let data = try? JSONSerialization.data(withJSONObject: row) else { return nil }
+                return try? decoder.decode(ChatThread.self, from: data)
+            }
+            if error == "对话列表读取失败，请重试。" { error = nil }
+        } catch {
+            if !hasUnsavedReply { self.error = "对话列表读取失败，请重试。" }
         }
     }
 
-    func startNewThread() {
+    @discardableResult
+    func startNewThread() -> Bool {
+        guard !pendingReplyBlocked else { return false }
+        if isStreaming { stop() }
+        if let runtime, !persistAssistantReply(using: runtime) { return false }
+        resetActiveThread()
+        error = nil
+        return true
+    }
+
+    private func resetActiveThread() {
         // 手动开的新对话不能被 attach() 的「自动续上一段」顶掉。
         loadedInitialThread = true
         activeThreadId = nil
         activeThreadTitle = nil
         activeBookId = nil
         messages.removeAll()
+        pendingUser = nil
         persistedReplyID = nil
-        error = nil
+        contextNote = nil
     }
 
-    func open(_ thread: ChatThread, using runtime: RuntimeHost) {
-        guard runtime.state == .ready else { return }
+    @discardableResult
+    func open(_ thread: ChatThread, using runtime: RuntimeHost) -> Bool {
+        guard runtime.state == .ready, !pendingReplyBlocked else { return false }
         // 正在生成时点了别的会话：先把这一轮停掉（半截回答照样落库），再切过去。
         if isStreaming { stop() }
-        struct Loaded: Decodable {
-            struct Stored: Decodable {
-                let id: String
-                let role: String
-                let content: String
-            }
-
-            let id: String
-            let messages: [Stored]
+        guard persistAssistantReply(using: runtime) else { return false }
+        let loaded: LoadedThread
+        do {
+            guard let json = try runtime.appJSON(
+                "ShudengApp.loadThread(\(Self.payload(["id": thread.id])))", timeout: 60
+            ) else { throw NSError(domain: "ChatPersistence", code: 2) }
+            loaded = try JSONDecoder().decode(LoadedThread.self, from: Data(json.utf8))
+            guard loaded.id == thread.id else { throw NSError(domain: "ChatPersistence", code: 2) }
+        } catch {
+            self.error = "对话读取失败，请重试。"
+            return false
         }
-        let json = runtime.appJSONOr(
-            "ShudengApp.loadThread(\(Self.payload(["id": thread.id])))",
-            fallback: "{}",
-            timeout: 60
-        )
-        guard let loaded = try? JSONDecoder().decode(Loaded.self, from: Data(json.utf8)) else { return }
         activeThreadId = loaded.id
+        pendingUser = nil
+        loadedInitialThread = true
         activeThreadTitle = thread.title
         activeBookId = thread.bookId
         messages = loaded.messages.map {
             Message(id: $0.id, role: $0.role == "assistant" ? .assistant : .user, text: $0.content)
         }
         persistedReplyID = messages.last?.role == .assistant ? messages.last?.id : nil
+        contextNote = nil
         error = nil
+        return true
     }
 
     func delete(_ thread: ChatThread, using runtime: RuntimeHost) {
         guard runtime.state == .ready else { return }
-        _ = runtime.appJSONOr(
-            "ShudengApp.deleteThread(\(Self.payload(["id": thread.id])))",
-            fallback: "\"ok\"",
-            timeout: 60
-        )
-        if activeThreadId == thread.id { startNewThread() }
+        if activeThreadId == thread.id, isStreaming { stop() }
+        do {
+            guard try runtime.appJSON("ShudengApp.deleteThread(\(Self.payload(["id": thread.id])))", timeout: 60) == "ok" else {
+                throw NSError(domain: "ChatPersistence", code: 1)
+            }
+        } catch {
+            self.error = "对话没能删除，请重试。"
+            return
+        }
+        if let pending = pendingReply, pending.threadId == thread.id {
+            // 用户明确删除了会话；残留备份只允许清理，不再补存。
+            if removePendingReply(pending, using: runtime) {
+                pendingReply = nil
+                pendingReplyBlocked = false
+                restoredPendingReply = true
+                hasUnsavedReply = false
+                error = nil
+            } else {
+                pendingReplyBlocked = true
+                restoredPendingReply = false
+                hasUnsavedReply = true
+                error = "对话已删除，但回答备份未能清理；请重试清理。"
+            }
+        }
+        if activeThreadId == thread.id {
+            resetActiveThread()
+            if !pendingReplyBlocked { error = nil }
+        }
         refreshThreads(using: runtime)
     }
 
     /// 改会话标题。当前正打开的就是这段时，导航栏标题一起跟着变。
-    func rename(_ thread: ChatThread, to title: String, using runtime: RuntimeHost) {
+    @discardableResult
+    func rename(_ thread: ChatThread, to title: String, using runtime: RuntimeHost) -> Bool {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, runtime.state == .ready else { return }
-        _ = runtime.appJSONOr(
-            "ShudengApp.renameThread(\(Self.payload(["id": thread.id, "title": trimmed])))",
-            fallback: "{}",
-            timeout: 30
-        )
+        guard !trimmed.isEmpty else {
+            error = "请输入对话名称。"
+            return false
+        }
+        guard runtime.state == .ready else {
+            error = "内核尚未就绪，请稍后重试。"
+            return false
+        }
+        guard updateMetadata("ShudengApp.renameThread(\(Self.payload(["id": thread.id, "title": trimmed])))", using: runtime) else { return false }
         if activeThreadId == thread.id { activeThreadTitle = String(trimmed.prefix(40)) }
         refreshThreads(using: runtime)
+        return true
     }
 
     /// 给「当前这段对话」换书（nil ＝ 挪回临时对话）。
     /// 对话还没建出来（一个字都没发过）时先记在内存里，第一条消息发出时随 createThread 一起落库。
     func setBook(_ bookId: String?, using runtime: RuntimeHost) {
-        activeBookId = bookId
-        guard let threadId = activeThreadId, runtime.state == .ready else { return }
+        guard let threadId = activeThreadId else {
+            activeBookId = bookId
+            return
+        }
+        guard runtime.state == .ready else { return }
         var body: [String: Any] = ["id": threadId]
         body["bookId"] = bookId ?? NSNull()
-        _ = runtime.appJSONOr(
-            "ShudengApp.setThreadBook(\(Self.payload(body)))",
-            fallback: "{}",
-            timeout: 30
-        )
+        guard updateMetadata("ShudengApp.setThreadBook(\(Self.payload(body)))", using: runtime) else { return }
+        activeBookId = bookId
         refreshThreads(using: runtime)
     }
-
     /// 把历史里的某段对话挪到另一本书（nil ＝ 挪回「临时对话」）。
     func move(_ thread: ChatThread, to bookId: String?, using runtime: RuntimeHost) {
         guard runtime.state == .ready else { return }
         var body: [String: Any] = ["id": thread.id]
         body["bookId"] = bookId ?? NSNull()
-        _ = runtime.appJSONOr(
-            "ShudengApp.setThreadBook(\(Self.payload(body)))",
-            fallback: "{}",
-            timeout: 30
-        )
+        guard updateMetadata("ShudengApp.setThreadBook(\(Self.payload(body)))", using: runtime) else { return }
         if activeThreadId == thread.id { activeBookId = bookId }
         refreshThreads(using: runtime)
+    }
+
+    private func updateMetadata(_ expression: String, using runtime: RuntimeHost) -> Bool {
+        struct Receipt: Decodable { let ok: Bool }
+        do {
+            guard let json = try runtime.appJSON(expression, timeout: 30),
+                  let receipt = try? JSONDecoder().decode(Receipt.self, from: Data(json.utf8)),
+                  receipt.ok else {
+                throw NSError(domain: "ChatPersistence", code: 1)
+            }
+            if !hasUnsavedReply { error = nil }
+            return true
+        } catch {
+            self.error = "对话修改没能保存到本地，请重试。"
+            return false
+        }
     }
 
     /// 阅读器里点 ✨ 进对话：当前这段要不是这本书的，就另开一段，别把别的书的问题混进来。
     func prepareForReading(_ book: LibraryStore.Book?) {
         guard let book else { return }
         if activeBookId == book.id { return }
-        startNewThread()
+        guard startNewThread() else { return }
         activeBookId = book.id
     }
 
     /// 阅读器里选中文字提问：每次都是一段挂在当前书上的新对话。
     func prepareForSelection(_ book: LibraryStore.Book?) {
-        startNewThread()
+        guard startNewThread() else { return }
         activeBookId = book?.id
     }
 
     // MARK: - 对话
 
+    @discardableResult
     func send(
         _ text: String,
         book: LibraryStore.Book?,
         contextText: String?,
         settings: AISettings,
         skill: AISkill? = nil
-    ) {
+    ) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isStreaming, let runtime, runtime.state == .ready else { return }
+        guard !trimmed.isEmpty, !isStreaming, !pendingReplyBlocked, let runtime, runtime.state == .ready else { return false }
 
         guard settings.isConfigured else {
             error = "先在设置里填模型名和端点"
-            return
+            return false
         }
 
-        guard ensureThread(book: book, firstMessage: trimmed, using: runtime) else { return }
-        messages.append(Message(role: .user, text: trimmed))
+        guard persistAssistantReply(using: runtime),
+              ensureThread(book: book, firstMessage: trimmed, using: runtime),
+              let threadId = activeThreadId else { return false }
+        if pendingUser?.threadId != threadId || pendingUser?.message.text != trimmed {
+            pendingUser = (threadId, Message(role: .user, text: trimmed))
+        }
+        guard let userMessage = pendingUser?.message,
+              save(userMessage, in: threadId, using: runtime) else { return false }
+        pendingUser = nil
+        messages.append(userMessage)
         messages.append(Message(role: .assistant, text: ""))
         persistedReplyID = nil
         isStreaming = true
@@ -233,14 +332,6 @@ final class ChatService: ObservableObject {
         contextNote = nil
         thinkingStartedAt = nil
         armWatchdog()
-
-        if let threadId = activeThreadId {
-            _ = runtime.appJSONOr(
-                "ShudengApp.appendMessage(\(Self.payload(["threadId": threadId, "role": "user", "content": trimmed])))",
-                fallback: "{}",
-                timeout: 30
-            )
-        }
 
         let requestID = UUID().uuidString
         self.requestID = requestID
@@ -284,27 +375,48 @@ final class ChatService: ObservableObject {
 
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8)
-        else { return }
+        else {
+            self.requestID = nil
+            watchdog?.cancel()
+            isStreaming = false
+            finishThinking()
+            dropEmptyAssistant()
+            error = "这条消息无法发送，请缩短内容后再试。"
+            return true
+        }
 
         do {
             // 不阻塞主线程：token 由 __nativeChatEvent 推给 handle()，结束时再收 done。
             try runtime.startApp("ShudengApp.chat(\(json))")
         } catch {
+            self.requestID = nil
             watchdog?.cancel()
             self.error = String(describing: error)
             isStreaming = false
+            dropEmptyAssistant()
         }
+        return true
+    }
+
+    /// 重试启动阶段未能加载的回答备份；列表页和会话页共用这条恢复路径。
+    @discardableResult
+    func retryPendingReply() -> Bool {
+        guard !isStreaming, let runtime, runtime.state == .ready else { return false }
+        return persistAssistantReply(using: runtime)
     }
 
     func stop() {
-        guard let runtime, let requestID else { return }
-        _ = runtime.evaluate("ShudengApp.abortChat('\(requestID)')")
+        let requestID = self.requestID
+        self.requestID = nil
+        if let runtime, let requestID {
+            _ = runtime.evaluate("ShudengApp.abortChat('\(requestID)')")
+        }
         watchdog?.cancel()
         isStreaming = false
         finishThinking()
         dropEmptyAssistant()
         // 停下来的半截回答也是回答：落库，别让历史里只剩提问。
-        persistAssistantReply(using: runtime)
+        if let runtime { persistAssistantReply(using: runtime) }
     }
 
     /// 顶部「清空」：开一段新对话，旧对话留在「会话」列表里，不会丢。
@@ -344,20 +456,209 @@ final class ChatService: ObservableObject {
         return true
     }
 
-    private func persistAssistantReply(using runtime: RuntimeHost) {
+    @discardableResult
+    private func persistAssistantReply(using runtime: RuntimeHost) -> Bool {
+        if !restoredPendingReply {
+            restorePendingReply(using: runtime)
+            guard !pendingReplyBlocked else { return false }
+        }
         guard let threadId = activeThreadId,
               let reply = messages.last,
               reply.role == .assistant,
-              reply.id != persistedReplyID,
+              (reply.id != persistedReplyID || pendingReply != nil),
               !reply.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        else { return }
+        else { return !hasUnsavedReply }
+        let pending = PendingReply(threadId: threadId, messageId: reply.id, text: reply.text)
+        pendingReply = pending
+        let backupWritten = writePendingReply(pending, using: runtime)
+        guard !pendingReplyBlocked else { return false }
+        guard save(reply, in: threadId, using: runtime) else {
+            hasUnsavedReply = true
+            error = backupWritten
+                ? "回答没能写入数据库，已备份，重启可恢复；请重试保存。"
+                : "回答只保存在当前页面，关闭应用会丢失；请检查存储空间后重试。"
+            return false
+        }
+        if hasUnsavedReply { error = nil }
+        hasUnsavedReply = false
         persistedReplyID = reply.id
-        _ = runtime.appJSONOr(
-            "ShudengApp.appendMessage(\(Self.payload(["threadId": threadId, "role": "assistant", "content": reply.text])))",
-            fallback: "{}",
-            timeout: 30
-        )
+        if backupWritten, !removePendingReply(pending, using: runtime) {
+            error = "回答已经保存，但临时备份清理失败；请重试清理。"
+            hasUnsavedReply = true
+            return false
+        }
+        pendingReply = nil
         refreshThreads(using: runtime)
+        return true
+    }
+
+    private func pendingReplyURL(using runtime: RuntimeHost) -> URL {
+        runtime.rootDirectory.appendingPathComponent(Self.pendingReplyFileName)
+    }
+
+    @discardableResult
+    private func writePendingReply(_ pending: PendingReply, using runtime: RuntimeHost) -> Bool {
+        let url = pendingReplyURL(using: runtime)
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                let existing = try JSONDecoder().decode(PendingReply.self, from: Data(contentsOf: url))
+                guard existing.isValid, existing == pending else { throw NSError(domain: "ChatPersistence", code: 2) }
+                pendingReplyBlocked = false
+                return true
+            }
+            let data = try JSONEncoder().encode(pending)
+            try data.write(to: url, options: .atomic)
+            pendingReplyBlocked = false
+            return true
+        } catch {
+            if FileManager.default.fileExists(atPath: url.path) {
+                pendingReplyBlocked = true
+                hasUnsavedReply = true
+                self.error = "回答备份无法读取或内容冲突，原文件已保留，未覆盖。"
+            } else {
+                pendingReplyBlocked = false
+            }
+            return false
+        }
+    }
+
+    @discardableResult
+    private func removePendingReply(_ pending: PendingReply, using runtime: RuntimeHost) -> Bool {
+        let url = pendingReplyURL(using: runtime)
+        guard FileManager.default.fileExists(atPath: url.path) else { return true }
+        do {
+            let existing = try JSONDecoder().decode(PendingReply.self, from: Data(contentsOf: url))
+            guard existing.isValid, existing == pending else { return false }
+            try FileManager.default.removeItem(at: url)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func restorePendingReply(using runtime: RuntimeHost) {
+        guard !restoredPendingReply else { return }
+        let url = pendingReplyURL(using: runtime)
+        guard FileManager.default.fileExists(atPath: url.path) || pendingReply != nil else {
+            restoredPendingReply = true
+            if pendingReplyBlocked {
+                pendingReplyBlocked = false
+                hasUnsavedReply = pendingReply != nil
+                if !hasUnsavedReply { error = nil }
+            }
+            return
+        }
+        let pending: PendingReply
+        do {
+            if FileManager.default.fileExists(atPath: url.path) {
+                pending = try JSONDecoder().decode(PendingReply.self, from: Data(contentsOf: url))
+            } else if let retained = pendingReply {
+                pending = retained
+            } else {
+                return
+            }
+            guard pending.isValid else { throw NSError(domain: "ChatPersistence", code: 2) }
+        } catch {
+            pendingReplyBlocked = true
+            hasUnsavedReply = true
+            self.error = "回答备份无法读取，原文件已保留，未覆盖；请修复存储后重试。"
+            return
+        }
+        pendingReply = pending
+        let loaded: LoadedThread
+        do {
+            guard let json = try runtime.appJSON(
+                "ShudengApp.loadThread(\(Self.payload(["id": pending.threadId])))", timeout: 60
+            ) else { throw NSError(domain: "ChatPersistence", code: 3) }
+            loaded = try JSONDecoder().decode(LoadedThread.self, from: Data(json.utf8))
+            guard loaded.id == pending.threadId else { throw NSError(domain: "ChatPersistence", code: 3) }
+        } catch {
+            activeThreadId = pending.threadId
+            activeThreadTitle = nil
+            activeBookId = nil
+            pendingUser = nil
+            persistedReplyID = nil
+            contextNote = nil
+            messages = [Message(id: pending.messageId, role: .assistant, text: pending.text)]
+            loadedInitialThread = true
+            pendingReplyBlocked = true
+            self.error = "原对话读取失败，已保留回答备份；请重试恢复。"
+            hasUnsavedReply = true
+            return
+        }
+        guard loaded.updatedAt != nil else {
+            guard loaded.title == "", loaded.bookId == nil, loaded.messages.isEmpty else {
+                pendingReplyBlocked = true
+                hasUnsavedReply = true
+                error = "原对话返回了无效数据，已保留回答备份；请重试恢复。"
+                return
+            }
+            if removePendingReply(pending, using: runtime) {
+                pendingReply = nil
+                pendingReplyBlocked = false
+                restoredPendingReply = true
+                hasUnsavedReply = false
+                if activeThreadId == pending.threadId { resetActiveThread() }
+                error = nil
+            } else {
+                pendingReplyBlocked = true
+                hasUnsavedReply = true
+                self.error = "原对话已删除，但回答备份未能清理；请重试清理。"
+            }
+            return
+        }
+        activeThreadId = loaded.id
+        activeThreadTitle = loaded.title
+        activeBookId = loaded.bookId
+        messages = loaded.messages.map {
+            Message(id: $0.id, role: $0.role == "assistant" ? .assistant : .user, text: $0.content)
+        }
+        loadedInitialThread = true
+        pendingReplyBlocked = false
+        if let existing = messages.first(where: { $0.id == pending.messageId }) {
+            guard existing.role == .assistant, existing.text == pending.text else {
+                pendingReplyBlocked = true
+                hasUnsavedReply = true
+                error = "未保存的回答与会话内容冲突，未覆盖原数据。"
+                return
+            }
+            persistedReplyID = pending.messageId
+            if removePendingReply(pending, using: runtime) {
+                pendingReply = nil
+                restoredPendingReply = true
+                hasUnsavedReply = false
+                error = nil
+            } else {
+                pendingReplyBlocked = true
+                hasUnsavedReply = true
+                error = "回答已经保存，但临时备份清理失败；请重试清理。"
+            }
+            return
+        }
+        messages.append(Message(id: pending.messageId, role: .assistant, text: pending.text))
+        persistedReplyID = nil
+        restoredPendingReply = true
+        hasUnsavedReply = true
+        error = "恢复了一条未保存的回答，请重试保存后再切换会话。"
+    }
+
+    private func save(_ message: Message, in threadId: String, using runtime: RuntimeHost) -> Bool {
+        struct Receipt: Decodable { let id: String }
+        let body = Self.payload(["id": message.id, "threadId": threadId,
+                                 "role": message.role == .assistant ? "assistant" : "user", "content": message.text])
+        do {
+            guard let json = try runtime.appJSON("ShudengApp.appendMessage(\(body))", timeout: 30),
+                  let receipt = try? JSONDecoder().decode(Receipt.self, from: Data(json.utf8)),
+                  receipt.id == message.id else {
+                throw NSError(domain: "ChatPersistence", code: 1)
+            }
+            return true
+        } catch {
+            self.error = message.role == .assistant
+                ? "回答没能保存到本地，请检查存储空间后重试；当前回答会保留。"
+                : "提问没能保存到本地，请检查存储空间后重新发送。"
+            return false
+        }
     }
 
     // MARK: - 看门狗
@@ -375,6 +676,8 @@ final class ChatService: ObservableObject {
 
     private func abortForTimeout() {
         guard isStreaming else { return }
+        let requestID = self.requestID
+        self.requestID = nil
         if let runtime, let requestID {
             _ = runtime.evaluate("ShudengApp.abortChat('\(requestID)')")
         }
@@ -411,11 +714,14 @@ final class ChatService: ObservableObject {
                 ? "已引用书里的 \(count) 段原文"
                 : "已引用：\(chapters.prefix(2).joined(separator: "、"))"
         case "done":
+            self.requestID = nil
             watchdog?.cancel()
             isStreaming = false
             finishThinking()
+            dropEmptyAssistant()
             if let runtime { persistAssistantReply(using: runtime) }
         case "error":
+            self.requestID = nil
             watchdog?.cancel()
             error = event["message"] as? String ?? "未知错误"
             isStreaming = false

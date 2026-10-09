@@ -56,10 +56,16 @@ struct AISettingsView: View {
                     SecureField("sk-…", text: $settings.apiKey)
                 }
                 Toggle("显示明文", isOn: $revealKey)
+                if let error = settings.apiKeyError {
+                    Text(error).foregroundStyle(.red)
+                        .accessibilityIdentifier("ai.keychainError")
+                    Button("重试钥匙串操作") { settings.retryKeychain() }
+                        .accessibilityIdentifier("ai.retryKeychain")
+                }
             } header: {
                 Text("API Key")
             } footer: {
-                Text("Key 存在 iOS 钥匙串（Keychain），不写入 UserDefaults，也不随备份导出。")
+                Text(settings.apiKeyError == nil ? "Key 存在 iOS 钥匙串（Keychain），不写入 UserDefaults，也不随备份导出。" : "钥匙串操作失败，当前输入尚未确认保存。")
             }
 
             Section("常用端点") {
@@ -79,7 +85,7 @@ struct AISettingsView: View {
             }
 
             Section {
-                LabeledContent("状态", value: settings.isConfigured ? "已配置" : "未配置")
+                LabeledContent("状态", value: settings.apiKeyError != nil ? "钥匙串操作失败" : settings.isConfigured ? "已配置" : "未配置")
             }
         }
         .navigationTitle("AI 设置")

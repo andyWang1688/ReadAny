@@ -68,6 +68,8 @@ struct ReaderScreen: View {
     /// 已经取过正文的章节号：换章才重新抽，翻页不重复抽。
     @State private var chapterTextSection = -1
     @State private var chapterTextTask: Task<Void, Never>?
+    @State private var speechTask: Task<Void, Never>?
+    @State private var speechGeneration = 0
     @State private var pageTotal = 0
     /// foliate 的剩余阅读时间（分钟），来自 relocate 的 time.total。
     @State private var remainingMinutes: Double = 0
@@ -80,11 +82,14 @@ struct ReaderScreen: View {
     /// 打开「写笔记」弹窗时先把选中的那一段存下来：
     /// 弹窗/键盘一起出现时 WebView 会重新排版，页面里的选中可能被系统收掉，届时再用 selection 就晚了。
     @State private var noteTarget: ReaderSelection?
+    @State private var editingAnnotation: HighlightItem?
     @State private var showNoteEditor = false
+    @State private var noteError: String?
     @State private var toast: String?
     @State private var showTranslation = false
     @State private var isTranslating = false
     @State private var translationSource = ""
+    @State private var translationGeneration = 0
     @State private var translatedText: String?
     /// 朗读睡眠定时器：0 = 不限时，其余是还剩多少秒。
     @State private var sleepMinutes = 0
@@ -165,6 +170,7 @@ struct ReaderScreen: View {
         .animation(.spring(response: 0.32, dampingFraction: 0.88), value: showControls)
         .onAppear { reading.beginSession() }
         .onDisappear {
+            translationGeneration += 1
             stopSpeech()
             reading.flush(using: runtime)
         }
@@ -188,11 +194,47 @@ struct ReaderScreen: View {
         .sheet(isPresented: $showSettings) { settingsSheet }
         .sheet(isPresented: $showSearch) { searchSheet }
         .sheet(isPresented: $showChat) { ChatView.ChatSheet() }
-        .sheet(isPresented: $showTranslation) { translationSheet }
-        .alert("写笔记", isPresented: $showNoteEditor) {
-            TextField("想法…", text: $noteDraft, axis: .vertical)
-            Button("取消", role: .cancel) { noteTarget = nil }
-            Button("保存") { saveNote() }
+        .sheet(isPresented: $showTranslation, onDismiss: {
+            translationGeneration += 1
+            isTranslating = false
+        }) { translationSheet }
+        .sheet(isPresented: $showNoteEditor) {
+            NavigationStack {
+                Form {
+                    if let target = noteTarget {
+                        Text(target.text)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("reader.noteOriginal")
+                    }
+                    TextField("想法…", text: $noteDraft, axis: .vertical)
+                        .lineLimit(3...12)
+                        .accessibilityIdentifier("reader.noteEditor")
+                    if let noteError {
+                        Text(noteError).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if editingAnnotation != nil {
+                        Button("删除标注", role: .destructive) { deleteAnnotation() }
+                            .accessibilityIdentifier("reader.annotationDelete")
+                    }
+                }
+                .navigationTitle("写笔记")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("取消") {
+                            noteTarget = nil
+                            editingAnnotation = nil
+                            noteDraft = ""
+                            showNoteEditor = false
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("保存") { saveNote() }
+                            .accessibilityIdentifier("reader.noteSave")
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
         }
     }
 
@@ -320,8 +362,10 @@ struct ReaderScreen: View {
                 }
                 Spacer(minLength: 0)
                 Button {
+                    editingAnnotation = nil
+                    if noteTarget != selection { noteDraft = "" }
                     noteTarget = selection
-                    noteDraft = ""
+                    noteError = nil
                     showNoteEditor = true
                 } label: {
                     Image(systemName: "square.and.pencil")
@@ -445,6 +489,9 @@ struct ReaderScreen: View {
     }
 
     private func stopSpeech() {
+        speechGeneration += 1
+        speechTask?.cancel()
+        speechTask = nil
         tts.stop()
         cancelSleepTimer()
         controller.send(["type": "clearTTSHighlight"])
@@ -838,6 +885,10 @@ struct ReaderScreen: View {
             stopSpeech()
             return
         }
+        if speechTask != nil {
+            stopSpeech()
+            return
+        }
         let text = reading.visibleText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             flash("这一页没有可朗读的正文")
@@ -845,14 +896,19 @@ struct ReaderScreen: View {
         }
         let rate = settings.ttsRate
         let anchor = reading.cfi
-        Task { @MainActor in
+        speechGeneration += 1
+        let generation = speechGeneration
+        speechTask = Task { @MainActor in
+            defer {
+                if speechGeneration == generation { speechTask = nil }
+            }
             let segments = await ttsRequester.request { requestID in
                 self.controller.evaluate(
                     "window.doGetVisibleTTSSegments && window.doGetVisibleTTSSegments("
                         + "\(Self.jsString(anchor)), \(Self.jsString(requestID)))"
                 )
             }
-            if Task.isCancelled || tts.isSpeaking { return }
+            if Task.isCancelled || speechGeneration != generation || tts.isSpeaking { return }
             // 分段拿不到（PDF / 引擎还没就绪）时退回整页朗读，功能不能因此变哑巴。
             let ordered = segments.isEmpty
                 ? ReaderSpeech.chunk(text).map { ReaderSpeech.Segment(text: $0, cfi: "") }
@@ -924,7 +980,9 @@ struct ReaderScreen: View {
             "chapterTitle": reading.chapterTitle,
         ]
         let saved = runtime.appJSONOr("ShudengApp.addHighlight(\(json(payload)))", fallback: "", timeout: 20)
-        guard !saved.isEmpty else {
+        guard let data = saved.data(using: .utf8),
+              let item = try? JSONDecoder().decode(HighlightItem.self, from: data),
+              item.bookId == book.id, item.cfi == selection.cfi else {
             flash("高亮没保存上，再试一次")
             return
         }
@@ -938,22 +996,68 @@ struct ReaderScreen: View {
         flash("已高亮")
     }
 
+    private func showAnnotation(cfi: String) {
+        guard !showNoteEditor, !cfi.isEmpty, let book = reading.book else { return }
+        let raw = runtime.appJSONOr("ShudengApp.listHighlights(\(json(["bookId": book.id])))", fallback: "", timeout: 20)
+        guard let data = raw.data(using: .utf8),
+              let items = try? JSONDecoder().decode([HighlightItem].self, from: data),
+              let item = items.last(where: { $0.bookId == book.id && $0.cfi == cfi }) else {
+            flash("标注读取失败，再试一次")
+            return
+        }
+        editingAnnotation = item
+        noteTarget = ReaderSelection(text: item.text, cfi: item.cfi)
+        noteDraft = item.note ?? ""
+        noteError = nil
+        showNoteEditor = true
+    }
+
+    private func deleteAnnotation() {
+        guard let item = editingAnnotation, item.bookId == reading.book?.id else { return }
+        let result = runtime.appJSONOr("ShudengApp.deleteHighlight(\(json(["id": item.id])))", fallback: "", timeout: 20)
+        guard result == "ok" else {
+            noteError = "标注没能删除，请重试。"
+            return
+        }
+        reading.markDirty()
+        controller.send(["type": "removeAnnotation", "annotation": ["value": item.cfi, "type": "highlight"]])
+        editingAnnotation = nil
+        noteTarget = nil
+        noteDraft = ""
+        noteError = nil
+        showNoteEditor = false
+        loadAnnotations()
+        flash("已删除标注")
+    }
+
     private func saveNote() {
         // 用打开弹窗时存下来的那一段：弹窗和键盘一出现，页面里的选中十有八九已经被系统收掉了。
         guard let book = reading.book, let target = noteTarget ?? selection else { return }
         let text = noteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        let payload: [String: Any] = [
-            "bookId": book.id,
-            "cfi": target.cfi,
-            "text": target.text,
-            "color": settings.highlightColor,
-            "note": text,
-            "chapterTitle": reading.chapterTitle,
-        ]
-        let saved = runtime.appJSONOr("ShudengApp.addHighlight(\(json(payload)))", fallback: "", timeout: 20)
-        guard !saved.isEmpty else {
-            flash("笔记没保存上，再试一次")
-            return
+        let color = editingAnnotation?.color ?? settings.highlightColor
+        if let item = editingAnnotation {
+            guard item.bookId == book.id, item.cfi == target.cfi else { return }
+            let result = runtime.appJSONOr("ShudengApp.updateHighlight(\(json(["id": item.id, "note": text])))", fallback: "", timeout: 20)
+            guard result == "ok" else {
+                noteError = "笔记没能保存，请检查存储空间后重试。"
+                return
+            }
+        } else {
+            let payload: [String: Any] = [
+                "bookId": book.id,
+                "cfi": target.cfi,
+                "text": target.text,
+                "color": settings.highlightColor,
+                "note": text,
+                "chapterTitle": reading.chapterTitle,
+            ]
+            let saved = runtime.appJSONOr("ShudengApp.addHighlight(\(json(payload)))", fallback: "", timeout: 20)
+            guard let data = saved.data(using: .utf8),
+                  let item = try? JSONDecoder().decode(HighlightItem.self, from: data),
+                  item.bookId == book.id, item.cfi == target.cfi else {
+                noteError = "笔记没能保存，请检查存储空间后重试。"
+                return
+            }
         }
         reading.markDirty()
         controller.send([
@@ -961,12 +1065,16 @@ struct ReaderScreen: View {
             "annotation": [
                 "value": target.cfi,
                 "type": "highlight",
-                "color": highlightColors.first { $0.name == settings.highlightColor }?.hex ?? "#facc15",
+                "color": highlightColors.first { $0.name == color }?.hex ?? "#facc15",
                 "note": text,
             ],
         ])
         self.selection = nil
+        editingAnnotation = nil
         noteTarget = nil
+        noteDraft = ""
+        noteError = nil
+        showNoteEditor = false
         controller.send(["type": "clearSelection"])
         flash("笔记已保存")
     }
@@ -977,6 +1085,8 @@ struct ReaderScreen: View {
             flash("先在设置里配 AI 端点")
             return
         }
+        translationGeneration += 1
+        let generation = translationGeneration
         translationSource = selection.text
         translatedText = nil
         isTranslating = true
@@ -994,6 +1104,7 @@ struct ReaderScreen: View {
         // 翻译要打网络：走非阻塞的异步通道，不能在主队列 block 里等 Promise
         //（宿主把网络回调派回主队列，主队列被堵着的话结果永远回不来，界面会一直「正在翻译…」）。
         runtime.callAsync(expression) { raw in
+            guard generation == translationGeneration else { return }
             isTranslating = false
             guard let data = raw.data(using: .utf8),
                   let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -1018,7 +1129,14 @@ struct ReaderScreen: View {
     private func toggleBookmark() {
         guard let book = reading.book, !reading.cfi.isEmpty else { return }
         if let existing = bookmarks.first(where: { $0.cfi == reading.cfi }) {
-            runtime.appJSONOr("ShudengApp.deleteBookmark(\(json(["id": existing.id])))", timeout: 20)
+            do {
+                guard try runtime.appJSON("ShudengApp.deleteBookmark(\(json(["id": existing.id])))", timeout: 20) == "ok" else {
+                    throw NSError(domain: "BookmarkPersistence", code: 1)
+                }
+            } catch {
+                flash("书签没能删除，再试一次")
+                return
+            }
             bookmarks.removeAll { $0.id == existing.id }
             reading.markDirty()
             syncBookmarkPullState()
@@ -1032,15 +1150,12 @@ struct ReaderScreen: View {
             "chapterTitle": reading.chapterTitle,
         ]
         let saved = runtime.appJSONOr("ShudengApp.addBookmark(\(json(payload)))", fallback: "", timeout: 20)
-        guard !saved.isEmpty else {
+        guard let item = decodeBookmark(saved),
+              item.bookId == book.id, item.cfi == reading.cfi else {
             flash("书签没保存上，再试一次")
             return
         }
-        if let item = decodeBookmark(saved) {
-            bookmarks.append(item)
-        } else {
-            loadBookmarks(force: true)
-        }
+        bookmarks.append(item)
         reading.markDirty()
         syncBookmarkPullState()
         flash("已加书签")
@@ -1149,6 +1264,7 @@ struct ReaderScreen: View {
             syncBookmarkPullState()
         case "chapterParagraphs":
             // 整章正文（思维导图 / 技能要用）：段落拼起来存进阅读会话。
+            if let section = event["section"] as? Int, section != sectionIndex { return }
             let paragraphs = event["paragraphs"] as? [[String: Any]] ?? []
             let text = paragraphs
                 .compactMap { $0["text"] as? String }
@@ -1159,6 +1275,10 @@ struct ReaderScreen: View {
         case "toggleBookmark":
             // reader.html 的下拉手势：拉到头松手就来这里加 / 删书签。
             toggleBookmark()
+        case "show-annotation":
+            showAnnotation(cfi: event["value"] as? String ?? "")
+        case "note-tooltip":
+            showAnnotation(cfi: event["cfi"] as? String ?? "")
         case "selection":
             let text = event["text"] as? String ?? ""
             let cfi = event["cfi"] as? String ?? ""
@@ -1553,12 +1673,13 @@ struct FoliateWebView: UIViewRepresentable {
 
             ioQueue.async { [weak self] in
                 let data = try? Data(contentsOf: url)
+                let base64 = data?.base64EncodedString()
                 DispatchQueue.main.async {
                     guard let self else { return }
                     self.loadingBookID = nil
                     // 等待期间书被换掉了，这次读出来的结果就作废。
                     guard self.pendingBook?.id == book.id else { return }
-                    guard let data else {
+                    guard let base64 else {
                         self.isLoading.wrappedValue = false
                         self.onEvent(["type": "error", "message": "这本书的文件读不出来，重新导入试试"])
                         return
@@ -1571,7 +1692,7 @@ struct FoliateWebView: UIViewRepresentable {
                     let script = """
                     window.handleCommand({
                       type: 'openBook',
-                      base64: '\(data.base64EncodedString())',
+                      base64: '\(base64)',
                       fileName: '\(Self.jsStringLiteral(book.filePath))',
                       mimeType: '\(mimeType)',
                       pageMargin: \(margin),

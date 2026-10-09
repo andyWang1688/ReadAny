@@ -91,7 +91,10 @@ function replyFor(payload) {
 
   // 技能：core 的 SkillExecutor 会发「Execute skill: <名字>」，回显一下证明技能真的注入了。
   const skill = /Execute skill: ([^\n]+)/.exec(prompt);
-  if (skill) return head + `技能答复：${skill[1].trim()}。`;
+  if (skill) {
+    const title = /^- Title: (.+)$/m.exec(systemOf(payload))?.[1] || "无";
+    return head + `技能答复：${skill[1].trim()}。当前书籍：${title}。`;
+  }
 
   // 系统提示自检：没有工具执行器的一方不该再写「必须用工具取原文」，
   // 否则 DeepSeek 会把 ｜DSML｜ 工具调用当正文吐出来（读者看到的就是乱码）。

@@ -569,16 +569,16 @@ struct ReadingReportView: View {
             guard let resultData = result.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any]
             else {
-                aiError = "解读失败：返回内容看不懂"
+                if range == current { aiError = "解读失败：返回内容看不懂" }
                 return
             }
             if let error = object["error"] as? String, !error.isEmpty {
-                aiError = "解读失败：\(error)"
+                if range == current { aiError = "解读失败：\(error)" }
                 return
             }
             let text = (object["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else {
-                aiError = "解读失败：模型没有返回内容"
+                if range == current { aiError = "解读失败：模型没有返回内容" }
                 return
             }
             aiText[current] = text

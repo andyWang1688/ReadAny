@@ -39,6 +39,23 @@ struct ChatListView: View {
                 }
             }
             .background(Color(.systemBackground))
+            .safeAreaInset(edge: .top) {
+                if let error = chat.error {
+                    HStack {
+                        Text(error).font(.footnote)
+                            .accessibilityIdentifier("chat.listError")
+                        Spacer()
+                        if chat.hasUnsavedReply {
+                            Button("重试保存") { chat.retryPendingReply() }
+                                .accessibilityIdentifier("chat.retrySave")
+                        } else {
+                            Button("知道了") { chat.error = nil }
+                        }
+                    }
+                    .padding(10)
+                    .background(Color.orange.opacity(0.15))
+                }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .searchable(
                 text: $searchText,
@@ -61,22 +78,35 @@ struct ChatListView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) { newThreadButton }
             }
-            .navigationDestination(item: $openThread) { thread in
+            .navigationDestination(item: $openThread) { _ in
                 ChatView()
-                    .onAppear { chat.open(thread, using: runtime) }
             }
             .navigationDestination(isPresented: $startNewConversation) {
                 ChatView()
             }
-            .alert("重命名对话", isPresented: renamePresented) {
-                TextField("对话名称", text: $renameText)
-                Button("取消", role: .cancel) { renaming = nil }
-                Button("保存") {
-                    if let thread = renaming {
-                        chat.rename(thread, to: renameText, using: runtime)
+            .sheet(item: $renaming) { _ in
+                NavigationStack {
+                    Form {
+                        TextField("对话名称", text: $renameText)
+                            .accessibilityIdentifier("chat.renameEditor")
+                        if let error = chat.error {
+                            Text(error).font(.footnote).foregroundStyle(.secondary)
+                        }
                     }
-                    renaming = nil
+                    .navigationTitle("重命名对话")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("取消") { renaming = nil }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("保存") { saveRename() }
+                                .accessibilityIdentifier("chat.renameSave")
+                        }
+                    }
                 }
+                .presentationDetents([.medium])
+                .interactiveDismissDisabled()
             }
             .sheet(item: $moving) { thread in
                 BookPickerSheet(
@@ -104,8 +134,7 @@ struct ChatListView: View {
 
     private var newThreadButton: some View {
         Button {
-            chat.startNewThread()
-            startNewConversation = true
+            if chat.startNewThread() { startNewConversation = true }
         } label: {
             Image(systemName: "plus")
         }
@@ -126,11 +155,11 @@ struct ChatListView: View {
         .accessibilityLabel("分组排序")
     }
 
-    private var renamePresented: Binding<Bool> {
-        Binding(
-            get: { renaming != nil },
-            set: { if !$0 { renaming = nil } }
-        )
+    private func saveRename() {
+        guard let thread = renaming else { return }
+        if chat.rename(thread, to: renameText, using: runtime) {
+            renaming = nil
+        }
     }
 
     private var list: some View {
@@ -139,8 +168,7 @@ struct ChatListView: View {
                 Section(isExpanded: expandedBinding(group.id)) {
                     ForEach(group.threads) { thread in
                         Button {
-                            chat.open(thread, using: runtime)
-                            openThread = thread
+                            if chat.open(thread, using: runtime) { openThread = thread }
                         } label: {
                             row(thread)
                         }

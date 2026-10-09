@@ -27,6 +27,7 @@ final class ReadingSession: ObservableObject {
     @Published var pendingSnippet: String?
     /// 数据版本号：阅读会话 / 高亮 / 笔记 / 书签落库后自增，书库和笔记页据此重新拉数据。
     @Published private(set) var dataVersion = 0
+    @Published private(set) var persistenceError: String?
     /// 这本书已有的高亮文字：提问时一并喂给 AI，让它知道读者划过哪些句子。
     @Published private(set) var recentHighlights: [String] = []
 
@@ -37,11 +38,40 @@ final class ReadingSession: ObservableObject {
     private var lastPageKey = ""
     /// 每页可见正文的字数：同一页重复回传时只记最大一次，避免重复累加。
     private var pageCharacters: [String: Int] = [:]
+    private struct SessionRecord: Codable {
+        let id: String
+        let bookId: String
+        let startedAt: Int
+        let totalActiveTime: Int
+        let pagesRead: Int
+        let charactersRead: Int
+        let startCfi: String
+        let endCfi: String
+    }
+    private struct ProgressRecord: Codable {
+        let bookId: String
+        let progress: Double
+        let cfi: String
+    }
+    private struct PendingFlush: Codable {
+        let record: SessionRecord
+        let progress: ProgressRecord?
+        var recordSaved = false
+    }
+    private enum SaveError: Error { case readQueue, writeQueue, database }
+    private var pendingFlushes: [PendingFlush] = []
+    private var queueLoaded = false
+    private var isFlushing = false
     /// 换书时要把上一本的会话落库，所以需要拿到运行时（由 RootView 注入）。
     private weak var runtime: RuntimeHost?
 
     func attach(to runtime: RuntimeHost) {
         self.runtime = runtime
+        flushPending(using: runtime)
+    }
+
+    func retryPersistence(using runtime: RuntimeHost) {
+        flushPending(using: runtime)
     }
 
     /// 提问时喂给 AI 的上下文：位置 + 选区（没有选区就用当前页正文）+ 最近高亮。
@@ -88,8 +118,7 @@ final class ReadingSession: ObservableObject {
     }
 
     func setVisibleText(_ text: String) {
-        guard text != visibleText else { return }
-        visibleText = text
+        if text != visibleText { visibleText = text }
         countVisibleCharacters(text)
     }
 
@@ -144,6 +173,7 @@ final class ReadingSession: ObservableObject {
 
     /// 从后台回到前台时续上计时（切后台时已经落库并停了会话）。
     func resumeSession() {
+        if let runtime { flushPending(using: runtime) }
         guard book != nil, isReaderPresented, sessionStartedAt == nil else { return }
         beginSession()
     }
@@ -155,62 +185,121 @@ final class ReadingSession: ObservableObject {
 
     /// 退出阅读器 / 切到后台 / 换书时落库：阅读会话 + 阅读进度。
     func flush(using runtime: RuntimeHost) {
-        guard let book, let startedAt = sessionStartedAt else { return }
-        flushSession(book: book, startedAt: startedAt, using: runtime)
+        if let book, let startedAt = sessionStartedAt {
+            capturePending(book: book, startedAt: startedAt)
+        }
+        flushPending(using: runtime)
     }
 
-    private func flushSession(book: LibraryStore.Book, startedAt: Date, using runtime: RuntimeHost) {
-        // 运行时没起来时先不结束本次计时，避免这段阅读时长被静默丢掉。
-        guard runtime.state == .ready else { return }
-        let elapsed = Int(Date().timeIntervalSince(startedAt) * 1000)
+    private func capturePending(book: LibraryStore.Book, startedAt: Date) {
+        let record = SessionRecord(
+            id: UUID().uuidString,
+            bookId: book.id,
+            startedAt: Int(startedAt.timeIntervalSince1970 * 1000),
+            totalActiveTime: Int(Date().timeIntervalSince(startedAt) * 1000),
+            pagesRead: max(pagesRead, 1),
+            charactersRead: charactersRead,
+            startCfi: startCfi,
+            endCfi: cfi
+        )
+        let progress = cfi.isEmpty ? nil : ProgressRecord(bookId: book.id, progress: fraction, cfi: cfi)
+        pendingFlushes.append(PendingFlush(record: record, progress: progress))
         sessionStartedAt = nil
-
-        let payload: [String: Any] = [
-            "bookId": book.id,
-            "startedAt": Int(startedAt.timeIntervalSince1970 * 1000),
-            "totalActiveTime": elapsed,
-            "pagesRead": max(pagesRead, 1),
-            "charactersRead": charactersRead,
-            "startCfi": startCfi,
-            "endCfi": cfi,
-        ]
-        runtime.appJSONOr("ShudengApp.recordSession(\(json(payload)))", fallback: "\"skipped\"", timeout: 20)
-
-        // 阅读器还没回报过位置（刚打开就退出 / 加载失败）时不动进度，
-        // 否则会把已读位置刷成 0%（saveProgress 会把 progress 直接覆盖）。
-        if !cfi.isEmpty {
-            let progress: [String: Any] = [
-                "bookId": book.id,
-                "progress": fraction,
-                "cfi": cfi,
-            ]
-            runtime.appJSONOr("ShudengApp.saveProgress(\(json(progress)))", timeout: 20)
-        }
-
         pagesRead = 0
         charactersRead = 0
         pageCharacters.removeAll()
-        markDirty()
     }
 
-    private func json(_ value: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: value) else { return "{}" }
-        return String(decoding: data, as: UTF8.self)
+    private func queueURL(using runtime: RuntimeHost) -> URL {
+        runtime.rootDirectory.appendingPathComponent("ReadingSession/pending-flushes.json")
+    }
+
+    private func loadPending(using runtime: RuntimeHost) throws {
+        guard !queueLoaded else { return }
+        let saved: [PendingFlush]
+        do {
+            let data = try Data(contentsOf: queueURL(using: runtime))
+            saved = try JSONDecoder().decode([PendingFlush].self, from: data)
+        } catch {
+            let failure = error as NSError
+            guard failure.domain == NSCocoaErrorDomain, failure.code == NSFileReadNoSuchFileError else {
+                throw SaveError.readQueue
+            }
+            saved = []
+        }
+        // 先恢复旧队列，再追加 attach 前已经捕获的新会话，保持提交顺序。
+        pendingFlushes = saved + pendingFlushes
+        queueLoaded = true
+    }
+
+    private func persist(_ queue: [PendingFlush], using runtime: RuntimeHost) throws {
+        do {
+            let url = queueURL(using: runtime)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(queue).write(to: url, options: .atomic)
+        } catch {
+            throw SaveError.writeQueue
+        }
+    }
+
+    private func expression<T: Encodable>(_ method: String, _ payload: T) throws -> String {
+        let json = String(decoding: try JSONEncoder().encode(payload), as: UTF8.self)
+        return "ShudengApp.\(method)(\(json))"
+    }
+
+    private func flushPending(using runtime: RuntimeHost) {
+        guard !isFlushing else { return }
+        isFlushing = true
+        defer { isFlushing = false }
+        do {
+            try loadPending(using: runtime)
+            if !pendingFlushes.isEmpty { try persist(pendingFlushes, using: runtime) }
+            guard runtime.state == .ready else {
+                persistenceError = pendingFlushes.isEmpty ? nil : "阅读记录已暂存，内核就绪后会重试。"
+                return
+            }
+            while let pending = pendingFlushes.first {
+                if !pending.recordSaved {
+                    let result = try runtime.appJSON(try expression("recordSession", pending.record), timeout: 20)
+                    guard result == "ok" || result == "skipped" else { throw SaveError.database }
+                    var acknowledged = pendingFlushes
+                    acknowledged[0].recordSaved = true
+                    try persist(acknowledged, using: runtime)
+                    pendingFlushes = acknowledged
+                }
+                if let progress = pending.progress {
+                    guard ["ok", "skipped"].contains(try runtime.appJSON(try expression("saveProgress", progress), timeout: 20)) else {
+                        throw SaveError.database
+                    }
+                }
+                let remaining = Array(pendingFlushes.dropFirst())
+                try persist(remaining, using: runtime)
+                pendingFlushes = remaining
+                markDirty()
+            }
+            persistenceError = nil
+        } catch SaveError.readQueue {
+            persistenceError = "阅读暂存文件无法读取，已保留原文件，请重试。"
+        } catch SaveError.writeQueue {
+            persistenceError = "阅读记录无法暂存到本地，请检查存储空间后重试；退出应用可能丢失未暂存内容。"
+        } catch {
+            persistenceError = "阅读记录已暂存，数据库保存未完成，请重试。"
+        }
     }
 
     private func handleBookChange(from previous: LibraryStore.Book?) {
+        guard previous?.id != book?.id else { return }
         // 从笔记 / 书签跳进另一本书时，上一本这次阅读的时长和进度不能丢。
-        if let previous, previous.id != book?.id, let runtime, let startedAt = sessionStartedAt {
-            flushSession(book: previous, startedAt: startedAt, using: runtime)
+        if let previous, let startedAt = sessionStartedAt {
+            capturePending(book: previous, startedAt: startedAt)
         }
+        if let runtime { flushPending(using: runtime) }
         resetContext()
         lastPageKey = ""
         chapterTitle = ""
         cfi = ""
         fraction = 0
-        if previous?.id != book?.id {
-            sessionStartedAt = nil
-        }
+        sessionStartedAt = nil
     }
 
     private func resetContext() {
@@ -218,5 +307,6 @@ final class ReadingSession: ObservableObject {
         selectionText = ""
         selectionCfi = ""
         chapterText = ""
+        recentHighlights.removeAll()
     }
 }

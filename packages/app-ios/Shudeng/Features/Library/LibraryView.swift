@@ -175,6 +175,7 @@ struct LibraryView: View {
                 .foregroundStyle(.secondary)
             TextField("搜索书名 / 作者", text: $store.query)
                 .focused($searchFocused)
+                .onSubmit { searchFocused = false }
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .font(.subheadline)
@@ -231,6 +232,12 @@ struct LibraryView: View {
             }
             if let indexError = store.indexError {
                 Text(indexError)
+            }
+            if let book = store.pendingIndexDeletion {
+                Button("重试删除《\(book.title)》索引") {
+                    store.deleteIndex(for: book, using: runtime)
+                }
+                .accessibilityIdentifier("library.retryIndexDeletion")
             }
             if let notice = store.notice {
                 Text(notice)

@@ -25,6 +25,7 @@ if (typeof g.setInterval === "undefined") {
     const tick = () => {
       if (!timers.has(id)) return;
       fn();
+      if (!timers.has(id)) return;
       timers.set(id, setTimeout(tick, ms));
     };
     timers.set(id, setTimeout(tick, ms));
@@ -311,10 +312,13 @@ if (typeof g.ReadableStream === "undefined") {
       this._done = false;
       this._err = null;
       this._pulling = false;
+      this._locked = false;
+      this._disturbed = false;
       this._source = source;
       const self = this;
       this._ctrl = {
         enqueue: (c) => {
+          if (self._done) return;
           self._q.push({ value: c });
           self._wake();
         },
@@ -323,6 +327,7 @@ if (typeof g.ReadableStream === "undefined") {
           self._wake();
         },
         error: (e) => {
+          self._q.length = 0;
           self._err = e;
           self._done = true;
           self._wake();
@@ -362,32 +367,113 @@ if (typeof g.ReadableStream === "undefined") {
         if (!this._q.length && !this._done) await new Promise((r) => this._waiters.push(r));
       }
     }
+    get locked() {
+      return this._locked;
+    }
     getReader() {
+      if (this._locked) throw new TypeError("ReadableStream is locked");
+      this._locked = true;
+      let released = false;
       return {
-        read: () => this._read(),
-        cancel: async () => {
-          this._done = true;
-          if (this._source.cancel) await this._source.cancel();
-          this._wake();
+        read: () => {
+          if (released) return Promise.reject(new TypeError("Reader lock was released"));
+          this._disturbed = true;
+          return this._read();
         },
-        releaseLock: () => {},
+        cancel: (reason) => {
+          if (released) return Promise.reject(new TypeError("Reader lock was released"));
+          return this._cancel(reason);
+        },
+        releaseLock: () => {
+          released = true;
+          this._locked = false;
+        },
         closed: Promise.resolve(),
       };
     }
-    async cancel() {
+    async _cancel(reason) {
+      this._disturbed = true;
+      if (this._err) throw this._err;
+      this._q.length = 0;
+      if (this._done) return;
       this._done = true;
-      if (this._source.cancel) await this._source.cancel();
       this._wake();
+      if (this._source.cancel) await this._source.cancel(reason);
+    }
+    async cancel(reason) {
+      if (this._locked) throw new TypeError("ReadableStream is locked");
+      await this._cancel(reason);
     }
     tee() {
-      return [this, this];
+      const reader = this.getReader();
+      const controllers = [];
+      const cancelled = [false, false];
+      const reasons = [];
+      let reading = null;
+      let finished = false;
+      let resolveCancellation;
+      let rejectCancellation;
+      const cancellation = new Promise((resolve, reject) => {
+        resolveCancellation = resolve;
+        rejectCancellation = reject;
+      });
+      const pull = () => {
+        if (finished) return;
+        if (!reading) {
+          reading = (async () => {
+            try {
+              const { done, value } = await reader.read();
+              if (finished) return;
+              for (let i = 0; i < 2; i++) {
+                if (cancelled[i]) continue;
+                if (done) controllers[i].close();
+                else controllers[i].enqueue(value instanceof Uint8Array ? value.slice() : value);
+              }
+              if (done) {
+                finished = true;
+                reader.releaseLock();
+                resolveCancellation();
+              }
+            } catch (error) {
+              finished = true;
+              for (let i = 0; i < 2; i++) {
+                if (!cancelled[i]) controllers[i].error(error);
+              }
+              reader.releaseLock();
+              resolveCancellation();
+            } finally {
+              reading = null;
+            }
+          })();
+        }
+        return reading;
+      };
+      return [0, 1].map((i) => new ReadableStreamPolyfill({
+        start(controller) { controllers[i] = controller; },
+        pull,
+        cancel(reason) {
+          cancelled[i] = true;
+          reasons[i] = reason;
+          if (cancelled[0] && cancelled[1] && !finished) {
+            finished = true;
+            reader.cancel(reasons).then(resolveCancellation, rejectCancellation)
+              .finally(() => reader.releaseLock());
+          }
+          return cancellation;
+        },
+      }));
     }
     [Symbol.asyncIterator]() {
-      const self = this;
+      const reader = this.getReader();
       return {
         next: async () => {
-          const r = await self._read();
-          return r.done ? { done: true, value: undefined } : { done: false, value: r.value };
+          const result = await reader.read();
+          if (result.done) reader.releaseLock();
+          return result;
+        },
+        return: async () => {
+          try { await reader.cancel(); } finally { reader.releaseLock(); }
+          return { done: true, value: undefined };
         },
       };
     }
@@ -528,43 +614,64 @@ if (typeof g.Response === "undefined") {
       this.ok = this.status >= 200 && this.status < 300;
       this.statusText = init.statusText ?? "";
       this.headers = new g.Headers(init.headers || {});
-      const isStream = body && typeof body.getReader === "function";
-      this._stream = isStream ? body : null;
-      this._body = isStream ? null : body;
+      this.url = init.url ?? "";
+      this._stream = body && typeof body.getReader === "function" ? body : null;
+      if (body != null && !this._stream) {
+        const bytes = body instanceof Uint8Array ? body
+          : body instanceof ArrayBuffer ? new Uint8Array(body)
+          : new g.TextEncoder().encode(String(body));
+        this._stream = new g.ReadableStream({
+          start(controller) {
+            controller.enqueue(bytes);
+            controller.close();
+          },
+        });
+      }
     }
-    async text() {
-      if (!this._stream) return typeof this._body === "string" ? this._body : "";
+    get bodyUsed() {
+      return this._stream ? this._stream._disturbed : false;
+    }
+    clone() {
+      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Response body is already used");
+      let body = null;
+      if (this._stream) [this._stream, body] = this._stream.tee();
+      return new g.Response(body, {
+        status: this.status, statusText: this.statusText, headers: this.headers, url: this.url,
+      });
+    }
+    async arrayBuffer() {
+      if (this.bodyUsed || this._stream?.locked) throw new TypeError("Response body is already used");
+      if (!this._stream) return new ArrayBuffer(0);
       const reader = this._stream.getReader();
       const parts = [];
       let size = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const bytes =
-          value instanceof Uint8Array ? value : new g.TextEncoder().encode(String(value));
-        parts.push(bytes);
-        size += bytes.length;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const bytes = value instanceof Uint8Array ? value : new g.TextEncoder().encode(String(value));
+          parts.push(bytes);
+          size += bytes.length;
+        }
+      } finally {
+        reader.releaseLock();
       }
       const all = new Uint8Array(size);
-      let off = 0;
-      for (const p of parts) {
-        all.set(p, off);
-        off += p.length;
+      let offset = 0;
+      for (const part of parts) {
+        all.set(part, offset);
+        offset += part.length;
       }
-      return new g.TextDecoder().decode(all);
+      return all.buffer;
+    }
+    async text() {
+      return new g.TextDecoder().decode(await this.arrayBuffer());
     }
     async json() {
       return JSON.parse(await this.text());
     }
     get body() {
-      if (this._stream) return this._stream;
-      const text = typeof this._body === "string" ? this._body : "";
-      return new g.ReadableStream({
-        start(ctrl) {
-          if (text) ctrl.enqueue(new g.TextEncoder().encode(text));
-          ctrl.close();
-        },
-      });
+      return this._stream;
     }
   };
 }
@@ -610,19 +717,42 @@ if (typeof g.__nativeFetchStream === "function") {
     else if (init.body != null) body = JSON.stringify(init.body);
 
     const taskId = "t" + Date.now() + Math.random().toString(36).slice(2);
+    const signal = init.signal || (input && input.signal);
+    const abortError = () => {
+      const error = new Error("The operation was aborted");
+      error.name = "AbortError";
+      return error;
+    };
+    if (signal && signal.aborted) return Promise.reject(abortError());
+
     const encoder = new TextEncoder();
     let controller = null;
+    let abortHandler = null;
+    const cleanup = () => {
+      if (signal && abortHandler && typeof signal.removeEventListener === "function") {
+        signal.removeEventListener("abort", abortHandler);
+      }
+      abortHandler = null;
+    };
     const stream = new ReadableStream({
       start(c) {
         controller = c;
       },
       cancel() {
+        cleanup();
         __nativeAbort(taskId);
       },
     });
 
     return new Promise((resolve, reject) => {
       let settled = false;
+      if (signal && typeof signal.addEventListener === "function") {
+        abortHandler = () => {
+          cleanup();
+          __nativeAbort(taskId);
+        };
+        signal.addEventListener("abort", abortHandler, { once: true });
+      }
       __nativeFetchStream(
         url,
         method,
@@ -634,6 +764,7 @@ if (typeof g.__nativeFetchStream === "function") {
           resolve(
             new Response(stream, {
               status: status || 200,
+              url,
               headers: JSON.parse(headersJson || "{}"),
             }),
           );
@@ -644,18 +775,20 @@ if (typeof g.__nativeFetchStream === "function") {
         (error) => {
           if (error) {
             if (settled) {
+              cleanup();
               if (controller) controller.error(new Error(error));
-            } else reject(new Error(error));
+            } else {
+              cleanup();
+              settled = true;
+              reject(new Error(error));
+            }
           } else if (controller) {
+            cleanup();
             controller.close();
           }
         },
       );
 
-      const signal = init.signal || (input && input.signal);
-      if (signal && typeof signal.addEventListener === "function") {
-        signal.addEventListener("abort", () => __nativeAbort(taskId));
-      }
     });
   };
 }
@@ -691,17 +824,18 @@ if (typeof g.__b64 === "undefined") {
     },
     decode(text) {
       const clean = String(text).replace(/[^A-Za-z0-9+/]/g, "");
-      const bytes = [];
+      const bytes = new Uint8Array(Math.ceil(clean.length / 4) * 3);
+      let offset = 0;
       for (let i = 0; i < clean.length; i += 4) {
         const c0 = INDEX[clean[i]];
         const c1 = INDEX[clean[i + 1]];
         const c2 = INDEX[clean[i + 2]];
         const c3 = INDEX[clean[i + 3]];
-        bytes.push((c0 << 2) | (c1 >> 4));
-        if (c2 !== undefined) bytes.push(((c1 & 15) << 4) | (c2 >> 2));
-        if (c3 !== undefined) bytes.push(((c2 & 3) << 6) | c3);
+        bytes[offset++] = (c0 << 2) | (c1 >> 4);
+        if (c2 !== undefined) bytes[offset++] = ((c1 & 15) << 4) | (c2 >> 2);
+        if (c3 !== undefined) bytes[offset++] = ((c2 & 3) << 6) | c3;
       }
-      return new Uint8Array(bytes);
+      return bytes.subarray(0, offset);
     },
   };
 }

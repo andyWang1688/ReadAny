@@ -93,6 +93,10 @@
       async select(sql, params) {
         return query(sql, params);
       },
+      async transaction(statements) {
+        const result = JSON.parse(__nativeDbTransaction(String(path), JSON.stringify(statements)) || "{}");
+        if (result.error) throw new Error(result.error);
+      },
       async close() {
         __nativeDbClose(String(path));
       },
@@ -214,7 +218,7 @@
         // 启动就先要一次，等用户真的建索引时基本已经就绪。
         try {
           if (typeof __nativeEmbedPrepare === "function") __nativeEmbedPrepare();
-        } catch (error) {
+        } catch {
           // 拿不到就算了：真正用的时候还会再试。
         }
         return {
@@ -288,14 +292,26 @@
   // 用户可能在模型还没建好时就点了「停止」，先记下来，等 controller 建好立刻中断。
   const pendingChatAborts = new Set();
 
-  async function modelFor(endpoint, model) {
-    const key = [endpoint.baseUrl, endpoint.apiKey, endpoint.provider, model].join("|");
+  function endpointFor(payload) {
+    return {
+      id: "ios",
+      name: payload.name || "iOS",
+      provider: payload.provider || "openai",
+      apiKey: payload.apiKey || "",
+      baseUrl: payload.baseUrl || "",
+      models: [payload.model],
+      modelsFetched: true,
+    };
+  }
+
+  async function modelFor(endpoint, model, options = {}) {
+    const key = JSON.stringify([endpoint.baseUrl, endpoint.apiKey, endpoint.provider, model, options]);
     const cached = chatModels.get(key);
     if (cached) return cached;
 
     // 失败重试压到 1 次（core 默认 6 次）：端点不通/断网时，手机上一分钟内就该看到
     // 「连不上」的错误，而不是盯着「正在生成…」转好几分钟。
-    const instance = await core.ai.createChatModelFromEndpoint(endpoint, model, { maxRetries: 1 });
+    const instance = await core.ai.createChatModelFromEndpoint(endpoint, model, { ...options, maxRetries: 1 });
     chatModels.set(key, instance);
     return instance;
   }
@@ -344,6 +360,50 @@
 
   /// 建索引进度：界面每 300ms 拉一次，比推事件简单，也不怕界面刚重建。
   let vectorizeState = { status: "idle", bookId: null, progress: 0, chunks: 0, error: null };
+  let vectorizeGeneration = 0;
+  let vectorizeTask = null;
+  let vectorizeTaskBookId = null;
+
+  // 删除与重建同一本书的索引不能交错，锁在第一次 await 之前占据。
+  const deletingIndexes = new Set();
+
+  async function removeBookIndex(bookId, removeBook = false) {
+    if (deletingIndexes.has(bookId)) throw new Error("正在删除这本书的索引，请稍后重试");
+    deletingIndexes.add(bookId);
+    try {
+      await bootstrap();
+      if (vectorizeTask && vectorizeTaskBookId === bookId) {
+        ++vectorizeGeneration;
+        vectorizeState = { status: "idle", bookId: null, progress: 0, chunks: 0, error: null };
+        await vectorizeTask;
+      }
+      const local = await core.db.getLocalDB();
+      await local.transaction([
+        { sql: "DELETE FROM chunks WHERE book_id = ?", params: [bookId] },
+        { sql: "DELETE FROM vector_index_provenance WHERE book_id = ?", params: [bookId] },
+      ]);
+      // 本地删除已提交，主库操作失败也不能继续命中内存中的旧索引。
+      core.rag.invalidateChunkCache(bookId);
+      if (removeBook) {
+        await core.db.deleteBook(bookId, { preserveData: false });
+      } else {
+        await core.db.updateBook(bookId, { isVectorized: false, vectorizeProgress: 0 });
+      }
+      if (vectorizeState.bookId === bookId) {
+        vectorizeState = { status: "idle", bookId: null, progress: 0, chunks: 0, error: null };
+      }
+    } finally {
+      deletingIndexes.delete(bookId);
+    }
+  }
+
+  async function availableIndexByBook() {
+    return new Map((await core.db.getAvailableVectorIndexProvenances()).map((row) => [row.bookId, row]));
+  }
+
+  function isIndexReady(book, available) {
+    return book.isVectorized === true && available.has(String(book.id));
+  }
 
   function vectorizeSnapshot() {
     return { ...vectorizeState, embedding: embeddingIdentity };
@@ -376,70 +436,92 @@
     /// 导入：文件已经由 Swift 复制进 App 数据目录，这里只做元数据抽取 + 落库。
     async importBook(input) {
       const payload = typeof input === "string" ? JSON.parse(input) : input || {};
-      await bootstrap();
-
-      const format = String(payload.format || "epub").toLowerCase();
-      // 重复导入去重（沿用旧版 ReadAny 的行为）：按文件内容哈希比对书库，
-      // 命中就直接返回，Swift 侧会把刚复制进来的文件删掉。
-      const digest = readFileDigest(payload.path);
-      if (digest.sha256) {
-        const books = await core.db.getBooks();
-        const duplicate = core.importDedupe.findDuplicateBookByHash(
-          core.importDedupe.createImportDuplicateIndex(books),
-          digest.sha256,
-        );
-        if (duplicate) return toJSON({ duplicate: true, book: duplicate });
-      }
-
-      const bytes = await platform.readFile(payload.path);
-      const meta = await core.bookImport.extractBookMetadata(
-        bytes,
-        format,
-        payload.fileName || payload.path,
-      );
-
-      const now = Date.now();
       let coverUrl = null;
-      if (meta.coverBytes && meta.coverBytes.length > 0) {
-        const ext = String(meta.coverMimeType || "").includes("png") ? "png" : "jpg";
-        coverUrl = `covers/${payload.id}.${ext}`;
-        await platform.writeFile(coverUrl, meta.coverBytes);
+      let preserveFiles = false;
+      try {
+        await bootstrap();
+        if (await core.db.getBook(payload.id)) {
+          preserveFiles = true;
+          throw new Error("书籍 ID 已存在");
+        }
+
+        const format = String(payload.format || "epub").toLowerCase();
+        // 重复导入去重（沿用旧版 ReadAny 的行为）：按文件内容哈希比对书库，
+        // 命中就直接返回，Swift 侧会把刚复制进来的文件删掉。
+        const digest = readFileDigest(payload.path);
+        if (digest.sha256) {
+          const books = await core.db.getBooks();
+          const duplicate = core.importDedupe.findDuplicateBookByHash(
+            core.importDedupe.createImportDuplicateIndex(books),
+            digest.sha256,
+          );
+          if (duplicate) return toJSON({ duplicate: true, book: duplicate });
+        }
+
+        const bytes = await platform.readFile(payload.path);
+        const meta = await core.bookImport.extractBookMetadata(
+          bytes,
+          format,
+          payload.fileName || payload.path,
+        );
+
+        const now = Date.now();
+        if (meta.coverBytes && meta.coverBytes.length > 0) {
+          const ext = String(meta.coverMimeType || "").includes("png") ? "png" : "jpg";
+          coverUrl = `covers/${payload.id}.${ext}`;
+          await platform.writeFile(coverUrl, meta.coverBytes);
+        }
+
+        const book = {
+          id: payload.id,
+          filePath: payload.path,
+          format,
+          meta: {
+            title: meta.title || payload.fileName || "未命名",
+            author: meta.author || "",
+            publisher: meta.publisher,
+            language: meta.language,
+            isbn: meta.isbn,
+            description: meta.description,
+            publishDate: meta.publishDate,
+            subjects: meta.subjects,
+            coverUrl,
+          },
+          addedAt: now,
+          updatedAt: now,
+          lastOpenedAt: now,
+          progress: 0,
+          fileHash: digest.sha256 || undefined,
+          isVectorized: false,
+          vectorizeProgress: 0,
+          tags: [],
+          syncStatus: "local",
+        };
+
+        await core.db.insertBook(book);
+        preserveFiles = true;
+        return toJSON({ duplicate: false, book });
+      } catch (error) {
+        if (preserveFiles) throw error;
+        // 清理只发生在 JS 导入已明确拒绝后；Swift 超时不会取消或删除文件。
+        const cleanupErrors = [];
+        for (const path of [payload.path, coverUrl].filter(Boolean)) {
+          try { await platform.deleteFile(path); } catch (cleanupError) {
+            cleanupErrors.push(String(cleanupError));
+          }
+        }
+        if (cleanupErrors.length) {
+          throw new Error(String(error) + "；临时文件清理失败：" + cleanupErrors.join("；"));
+        }
+        throw error;
       }
-
-      const book = {
-        id: payload.id,
-        filePath: payload.path,
-        format,
-        meta: {
-          title: meta.title || payload.fileName || "未命名",
-          author: meta.author || "",
-          publisher: meta.publisher,
-          language: meta.language,
-          isbn: meta.isbn,
-          description: meta.description,
-          publishDate: meta.publishDate,
-          subjects: meta.subjects,
-          coverUrl,
-        },
-        addedAt: now,
-        updatedAt: now,
-        lastOpenedAt: now,
-        progress: 0,
-        fileHash: digest.sha256 || undefined,
-        isVectorized: false,
-        vectorizeProgress: 0,
-        tags: [],
-        syncStatus: "local",
-      };
-
-      await core.db.insertBook(book);
-      return toJSON({ duplicate: false, book });
     },
 
     /// 更新阅读进度 / 最近阅读位置。
     async saveProgress(input) {
       const payload = typeof input === "string" ? JSON.parse(input) : input || {};
       await bootstrap();
+      if (!payload.bookId || !(await core.db.getBook(String(payload.bookId)))) return "skipped";
       const updates = {
         lastOpenedAt: Date.now(),
         updatedAt: Date.now(),
@@ -457,6 +539,9 @@
       await bootstrap();
       const totalActiveTime = Math.round(Number(payload.totalActiveTime || 0));
       if (!payload.bookId || totalActiveTime < 1000) return "skipped";
+      // 书已被删除时，历史会话队列应被视为已处理，不能因外键失败堵住后续书。
+      const book = await core.db.getBook(String(payload.bookId));
+      if (!book) return "skipped";
 
       const startedAt = Number(payload.startedAt || Date.now() - totalActiveTime);
       const session = {
@@ -602,15 +687,7 @@
       await bootstrap();
       core.ai.setStreamingFetch(globalThis.fetch);
 
-      const endpoint = {
-        id: "ios",
-        name: "iOS",
-        provider: payload.provider || "openai",
-        apiKey: payload.apiKey || "",
-        baseUrl: payload.baseUrl || "",
-        models: [payload.model],
-        modelsFetched: true,
-      };
+      const endpoint = endpointFor(payload);
 
       try {
         const model = await modelFor(endpoint, payload.model);
@@ -714,12 +791,13 @@
 
     async deleteBook(input) {
       const payload = typeof input === "string" ? JSON.parse(input) : input || {};
-      await bootstrap();
-      await core.db.deleteBook(String(payload.id), { preserveData: false });
+      const bookId = String(payload.id || "");
+      if (!bookId) throw new Error("缺少 id");
+      await removeBookIndex(bookId, true);
       return "ok";
     },
 
-    /// 选中文本翻译：走和对话同一个端点（core 的 aiTranslate）。
+    /// 选中文本翻译：复用对话的服务商适配，保留原翻译提示与生成参数。
     async translate(input) {
       const payload = typeof input === "string" ? JSON.parse(input) : input || {};
       await bootstrap();
@@ -727,14 +805,17 @@
       if (!text.trim()) return toJSON({ translated: "" });
 
       try {
-        const [translated] = await core.translation.aiTranslate(
-          [text],
-          "AUTO",
-          String(payload.targetLang || "zh"),
-          String(payload.apiKey || ""),
-          String(payload.baseUrl || ""),
-          String(payload.model || ""),
-        );
+        core.ai.setStreamingFetch(globalThis.fetch);
+        const model = await modelFor(endpointFor(payload), payload.model, {
+          temperature: 0.3, maxTokens: 2048, streaming: false,
+        });
+        const response = await model.invoke([
+          new core.messages.SystemMessage(core.translation.buildAITranslationPrompt("AUTO", String(payload.targetLang || "zh"))),
+          new core.messages.HumanMessage(text),
+        ]);
+        const translated = typeof response.content === "string"
+          ? response.content
+          : (response.content || []).filter((part) => part.type === "text").map((part) => part.text || "").join("");
         return toJSON({ translated: translated || "" });
       } catch (error) {
         return toJSON({ error: String((error && error.message) || error) });
@@ -809,11 +890,26 @@
         content: String(payload.content || ""),
         createdAt: now,
       };
-      await core.db.insertMessage(message);
+      try {
+        await core.db.insertMessage(message);
+      } catch (error) {
+        // 固定 ID 重试可能遇到“已写入但回执丢失”；仅接受内容完全相同的已有消息。
+        if (!payload.id) throw error;
+        const db = await core.db.getDB();
+        const rows = await db.select(
+          "SELECT thread_id, role, content, created_at FROM messages WHERE id = ?",
+          [message.id],
+        );
+        const saved = rows[0];
+        if (!saved || saved.thread_id !== message.threadId || saved.role !== message.role || saved.content !== message.content) {
+          throw error;
+        }
+        message.createdAt = saved.created_at;
+      }
       if (payload.title) {
         await core.db.updateThreadTitle(message.threadId, String(payload.title).slice(0, 40));
       }
-      return toJSON({ id: message.id, createdAt: now });
+      return toJSON({ id: message.id, createdAt: message.createdAt });
     },
 
     async deleteThread(input) {
@@ -849,7 +945,7 @@
       let diagnostics = "";
       try {
         diagnostics = String(__nativeEmbedDiagnostics() || "");
-      } catch (error) {
+      } catch {
         diagnostics = "";
       }
       const attempt = (text) => {
@@ -887,79 +983,100 @@
       const payload = typeof input === "string" ? JSON.parse(input) : input || {};
       const bookId = String(payload.bookId || "");
       if (!bookId) return toJSON({ error: "缺少 bookId" });
-      if (vectorizeState.status === "running") {
-        return toJSON({ error: `正在给《${vectorizeState.title || vectorizeState.bookId}》建索引` });
+      if (deletingIndexes.has(bookId)) return toJSON({ error: "正在删除这本书的索引，请稍后重试" });
+      if (vectorizeState.status === "running" || vectorizeTask) {
+        const activeBook = vectorizeState.title || vectorizeState.bookId || vectorizeTaskBookId || "这本书";
+        return toJSON({ error: `正在给《${activeBook}》建索引` });
       }
-      await bootstrap();
-
-      const books = await core.db.getBooks();
-      const book = books.find((item) => String(item.id) === bookId);
-      if (!book) return toJSON({ error: "书库里没这本书" });
-
-      const title = (book.meta && book.meta.title) || book.title || "";
-      vectorizeState = { status: "running", bookId, title, progress: 0, chunks: 0, error: null };
-      try {
-        const bytes = await platform.readFile(book.filePath);
-        const chapters = core.epubText.extractEpubChapters(bytes);
-        // 探测用的是这本书自己的正文：短句能出向量、正文出不来，是最坑的一种情况。
-        const sample = String((chapters[0] && chapters[0].content) || title).trim().slice(0, 200) || EMBED_PROBE;
-        const probe = nativeEmbed([sample]);
-        const modelId = probe.modelId;
-        await core.rag.triggerVectorizeBook(
-          bookId,
-          chapters,
-          {
-            vectorModelEnabled: true,
-            vectorModelMode: "builtin",
-            selectedBuiltinModelId: null,
-            remoteModel: null,
-            nativeEmbedder: {
-              modelId,
-              dimensions: probe.dimensions,
-              embed: async (texts) => nativeEmbed(texts, modelId).vectors,
+      const generation = ++vectorizeGeneration;
+      vectorizeState = { status: "running", bookId, title: "", progress: 0, chunks: 0, error: null };
+      const task = (async () => {
+        try {
+          await bootstrap();
+          const book = await core.db.getBook(bookId);
+          if (generation !== vectorizeGeneration) return toJSON({ cancelled: true });
+          if (!book) throw new Error("书库里没这本书");
+          const title = (book.meta && book.meta.title) || book.title || "";
+          vectorizeState = { ...vectorizeState, title };
+          const bytes = await platform.readFile(book.filePath);
+          const chapters = core.epubText.extractEpubChapters(bytes);
+          // 探测用的是这本书自己的正文：短句能出向量、正文出不来，是最坑的一种情况。
+          const sample = String((chapters[0] && chapters[0].content) || title).trim().slice(0, 200) || EMBED_PROBE;
+          const probe = nativeEmbed([sample]);
+          const modelId = probe.modelId;
+          await core.rag.triggerVectorizeBook(
+            bookId,
+            chapters,
+            {
+              vectorModelEnabled: true,
+              vectorModelMode: "builtin",
+              selectedBuiltinModelId: null,
+              remoteModel: null,
+              nativeEmbedder: {
+                modelId,
+                dimensions: probe.dimensions,
+                embed: async (texts) => nativeEmbed(texts, modelId).vectors,
+              },
             },
-          },
-          {
-            onBookUpdate(id, update) {
-              // 书本状态写库是异步的，界面靠 vectorizeStatus 轮询，这里不阻塞流水线。
-              core.db.updateBook(String(id), update).catch(() => {});
+            {
+              onBookUpdate(id, update) {
+                if (generation !== vectorizeGeneration) return;
+                return core.db.updateBook(String(id), update);
+              },
+              isCancelled() {
+                return generation !== vectorizeGeneration;
+              },
             },
-          },
-          (progress) => {
-            const total = progress.totalChunks || 0;
-            vectorizeState = {
-              ...vectorizeState,
-              status: vectorizeState.status === "error" ? "error" : "running",
-              progress: total > 0 ? Math.min(1, progress.processedChunks / total) : 0,
-              chunks: progress.processedChunks || vectorizeState.chunks,
-            };
-          },
-        );
-        embeddingIdentity = { modelId, dimensions: probe.dimensions };
-        vectorizeState = { ...vectorizeState, status: "done", progress: 1 };
-        return toJSON({ ok: true, chapters: chapters.length, chunks: vectorizeState.chunks });
-      } catch (error) {
-        const message = String((error && error.message) || error);
-        vectorizeState = { ...vectorizeState, status: "error", error: message };
-        return toJSON({ error: message });
+            (progress) => {
+              if (generation !== vectorizeGeneration) return;
+              const total = progress.totalChunks || 0;
+              vectorizeState = {
+                ...vectorizeState,
+                status: vectorizeState.status === "error" ? "error" : "running",
+                progress: total > 0 ? Math.min(1, progress.processedChunks / total) : 0,
+                chunks: progress.processedChunks || vectorizeState.chunks,
+              };
+            },
+          );
+          if (generation !== vectorizeGeneration) return toJSON({ cancelled: true });
+          embeddingIdentity = { modelId, dimensions: probe.dimensions };
+          vectorizeState = { ...vectorizeState, status: "done", progress: 1 };
+          return toJSON({ ok: true, chapters: chapters.length, chunks: vectorizeState.chunks });
+        } catch (error) {
+          if (generation !== vectorizeGeneration) return toJSON({ cancelled: true });
+          const message = String((error && error.message) || error);
+          vectorizeState = { ...vectorizeState, status: "error", error: message };
+          return toJSON({ error: message });
+        }
+      })();
+      vectorizeTask = task;
+      vectorizeTaskBookId = bookId;
+      const result = await task;
+      if (vectorizeTask === task) {
+        vectorizeTask = null;
+        vectorizeTaskBookId = null;
       }
+      return result;
     },
 
     /// 已经建过索引的书（带向量模型出处）。
     async vectorizedBooks() {
       await bootstrap();
       const books = await core.db.getBooks();
+      const provenanceByBook = new Map((await core.db.getVectorIndexProvenances()).map((row) => [row.bookId, row]));
+      const available = await availableIndexByBook();
       const rows = [];
       for (const book of books) {
         const id = String(book.id);
-        const provenance = await core.db.getVectorIndexProvenance(id);
-        if (!provenance && book.isVectorized !== true) continue;
+        const provenance = provenanceByBook.get(id);
+        // 保留未完成的本地索引供删除 / 重试；主库标志不能凭空制造本地索引。
+        if (!provenance) continue;
         rows.push({
           bookId: id,
           title: (book.meta && book.meta.title) || book.title || "",
           modelId: provenance ? provenance.modelId : "",
           dimensions: provenance ? provenance.dimensions : 0,
-          isVectorized: book.isVectorized === true,
+          isVectorized: isIndexReady(book, available),
         });
       }
       return toJSON(rows);
@@ -976,8 +1093,9 @@
       const wanted = Array.isArray(payload.bookIds) && payload.bookIds.length
         ? new Set(payload.bookIds.map(String))
         : null;
+      const available = await availableIndexByBook();
       const targets = books.filter((book) =>
-        wanted ? wanted.has(String(book.id)) : book.isVectorized === true
+        isIndexReady(book, available) && (!wanted || wanted.has(String(book.id)))
       );
 
       const topK = Math.max(1, Math.min(20, Number(payload.topK) || 8));
@@ -987,7 +1105,7 @@
       for (const book of targets) {
         try {
           // 每本书按自己索引里记的模型算查询向量：不同书可能是不同档的端侧模型。
-          const provenance = await core.db.getVectorIndexProvenance(String(book.id));
+          const provenance = available.get(String(book.id));
           const service = embeddingService(provenance ? String(provenance.modelId || "") : "");
           core.rag.configureSearch(service, service.provenance);
           const hits = await core.rag.search({
@@ -1022,14 +1140,7 @@
       const payload = typeof input === "string" ? JSON.parse(input) : input || {};
       const bookId = String(payload.bookId || "");
       if (!bookId) return toJSON({ error: "缺少 bookId" });
-      await bootstrap();
-      await core.db.deleteChunks(bookId);
-      await core.db.deleteVectorIndexProvenance(bookId);
-      await core.db.updateBook(bookId, { isVectorized: false, vectorizeProgress: 0 });
-      core.rag.invalidateChunkCache(bookId);
-      if (vectorizeState.bookId === bookId) {
-        vectorizeState = { status: "idle", bookId: null, progress: 0, chunks: 0, error: null };
-      }
+      await removeBookIndex(bookId);
       return toJSON({ ok: true });
     },
 
@@ -1068,15 +1179,7 @@
       await bootstrap();
       core.ai.setStreamingFetch(globalThis.fetch);
 
-      const endpoint = {
-        id: "ios",
-        name: "iOS",
-        provider: payload.provider || "openai",
-        apiKey: payload.apiKey || "",
-        baseUrl: payload.baseUrl || "",
-        models: [payload.model],
-        modelsFetched: true,
-      };
+      const endpoint = endpointFor(payload);
 
       try {
         const model = await modelFor(endpoint, payload.model);
@@ -1126,15 +1229,7 @@
         await bootstrap();
         core.ai.setStreamingFetch(globalThis.fetch);
 
-        const endpoint = {
-          id: "ios",
-          name: payload.name || "iOS",
-          provider: payload.provider || "openai",
-          apiKey: payload.apiKey || "",
-          baseUrl: payload.baseUrl || "",
-          models: [payload.model],
-          modelsFetched: true,
-        };
+        const endpoint = endpointFor(payload);
         const model = await modelFor(endpoint, payload.model);
 
         // 技能（core 的 builtin skills）：prompt 走 system，参数跟用户输入一起走 human，
@@ -1175,9 +1270,10 @@
           try {
             const library = await core.db.getBooks();
             const target = library.find((item) => String(item.id) === String(payload.book.id));
-            if (target?.isVectorized === true) {
+            const available = await availableIndexByBook();
+            if (target && isIndexReady(target, available)) {
               // 用这本书索引里记的模型算查询向量（书是用哪一档建的，就问哪一档）。
-              const provenance = await core.db.getVectorIndexProvenance(String(target.id));
+              const provenance = available.get(String(target.id));
               const service = embeddingService(provenance ? String(provenance.modelId || "") : "");
               core.rag.configureSearch(service, service.provenance);
               const hits = await core.rag.search({

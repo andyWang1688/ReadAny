@@ -117,6 +117,26 @@ public final class SQLiteDatabase {
         return "\(reason) [\(head)]"
     }
 
+    /// 一次宿主调用内提交全部语句；JS 在 BEGIN / COMMIT 之间不能插入其他写入。
+    public func transaction(statementsJSON: String) throws {
+        guard let statements = try JSONSerialization.jsonObject(with: Data(statementsJSON.utf8)) as? [[String: Any]] else {
+            throw SQLiteError.prepare("Invalid transaction statements")
+        }
+        _ = try query("BEGIN IMMEDIATE")
+        do {
+            for statement in statements {
+                guard let sql = statement["sql"] as? String else {
+                    throw SQLiteError.prepare("Missing transaction SQL")
+                }
+                _ = try query(sql, statement["params"] as? [Any] ?? [])
+            }
+            _ = try query("COMMIT")
+        } catch {
+            _ = try? query("ROLLBACK")
+            throw error
+        }
+    }
+
     public func jsonQuery(_ sql: String, paramsJSON: String) throws -> String {
         let params = (try? JSONSerialization.jsonObject(with: Data(paramsJSON.utf8))) as? [Any] ?? []
         let rows = try query(sql, params)

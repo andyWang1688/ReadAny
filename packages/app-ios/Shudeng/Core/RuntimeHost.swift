@@ -165,7 +165,7 @@ final class RuntimeHost: ObservableObject {
     /// 一次性异步调用：JS 的 Promise 结算后由 __nativeAsyncResult 回推，全程不阻塞主线程。
     /// 阻塞版（appJSONOr）只适合走同步宿主能力（SQLite / 文件）的调用；带网络的调用一律走这里。
     func callAsync(_ expression: String, timeout: TimeInterval = 120, onResult: @escaping (String) -> Void) {
-        guard let runtime else {
+        guard runtime != nil else {
             onResult(#"{"error":"core 运行时尚未启动"}"#)
             return
         }

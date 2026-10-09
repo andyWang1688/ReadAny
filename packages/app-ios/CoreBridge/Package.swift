@@ -19,7 +19,8 @@ let package = Package(
         ),
         .testTarget(
             name: "ShudengCoreBridgeTests",
-            dependencies: ["ShudengCoreBridge"]
+            dependencies: ["ShudengCoreBridge"],
+            resources: [.copy("Fixtures/sample.epub")]
         ),
     ]
 )

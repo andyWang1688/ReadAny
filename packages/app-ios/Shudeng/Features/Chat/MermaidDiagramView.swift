@@ -146,6 +146,7 @@ struct MermaidBlockView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var svg: String?
     @State private var failed = false
+    @State private var renderGeneration = 0
 
     var body: some View {
         Group {
@@ -173,6 +174,7 @@ struct MermaidBlockView: View {
             }
         }
         .task(id: cacheKey) { render() }
+        .onDisappear { renderGeneration += 1 }
     }
 
     private var placeholder: some View {
@@ -190,8 +192,12 @@ struct MermaidBlockView: View {
     }
 
     private func render() {
+        renderGeneration += 1
+        let generation = renderGeneration
+        let key = cacheKey
         guard !streaming else { return }
-        if let cached = MermaidSVGCache.shared.value(for: cacheKey) {
+        if let cached = MermaidSVGCache.shared.value(for: key) {
+            failed = false
             svg = cached
             return
         }
@@ -207,6 +213,7 @@ struct MermaidBlockView: View {
         }
 
         runtime.callAsync("ShudengApp.renderMermaid(\(json))", timeout: 30) { raw in
+            guard generation == renderGeneration else { return }
             guard let data = raw.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let value = object["svg"] as? String,
@@ -215,7 +222,7 @@ struct MermaidBlockView: View {
                 failed = true
                 return
             }
-            MermaidSVGCache.shared.store(value, for: cacheKey)
+            MermaidSVGCache.shared.store(value, for: key)
             svg = value
         }
     }

@@ -51,27 +51,31 @@ final class NotesStore: ObservableObject {
     func refresh(using runtime: RuntimeHost) {
         guard runtime.state == .ready else { return }
         do {
-            let highlightJSON = runtime.appJSONOr("ShudengApp.listHighlights({})", fallback: "[]", timeout: 60)
+            let highlightJSON = try runtime.appJSON("ShudengApp.listHighlights({})", timeout: 60) ?? ""
             highlights = try JSONDecoder().decode([HighlightItem].self, from: Data(highlightJSON.utf8))
             error = nil
         } catch {
-            self.error = String(describing: error)
+            self.error = "笔记读取失败，已保留上次内容，请重试。"
         }
     }
 
     /// 不带 bookId 一次性拿全部书签，避免按书循环调用把主线程堵住。
     func refreshBookmarks(using runtime: RuntimeHost) {
         guard runtime.state == .ready else { return }
-        let text = runtime.appJSONOr("ShudengApp.listBookmarks({})", fallback: "[]", timeout: 60)
-        let items = (try? JSONDecoder().decode([BookmarkItem].self, from: Data(text.utf8))) ?? []
-        bookmarks = items.sorted { $0.createdAt > $1.createdAt }
+        do {
+            let text = try runtime.appJSON("ShudengApp.listBookmarks({})", timeout: 60) ?? ""
+            let items = try JSONDecoder().decode([BookmarkItem].self, from: Data(text.utf8))
+            bookmarks = items.sorted { $0.createdAt > $1.createdAt }
+        } catch {
+            self.error = "书签读取失败，已保留上次内容，请重试。"
+        }
     }
 
     func delete(highlight: HighlightItem, using runtime: RuntimeHost) {
         let payload: [String: Any] = ["id": highlight.id]
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         let json = String(decoding: data, as: UTF8.self)
-        runtime.appJSONOr("ShudengApp.deleteHighlight(\(json))", timeout: 30)
+        guard write("ShudengApp.deleteHighlight(\(json))", using: runtime) else { return }
         highlights.removeAll { $0.id == highlight.id }
     }
 
@@ -79,16 +83,31 @@ final class NotesStore: ObservableObject {
         let payload: [String: Any] = ["id": bookmark.id]
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         let json = String(decoding: data, as: UTF8.self)
-        runtime.appJSONOr("ShudengApp.deleteBookmark(\(json))", timeout: 30)
+        guard write("ShudengApp.deleteBookmark(\(json))", using: runtime) else { return }
         bookmarks.removeAll { $0.id == bookmark.id }
     }
 
-    func update(highlight: HighlightItem, note: String, using runtime: RuntimeHost) {
+    @discardableResult
+    func update(highlight: HighlightItem, note: String, using runtime: RuntimeHost) -> Bool {
         let payload: [String: Any] = ["id": highlight.id, "note": note]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return false }
         let json = String(decoding: data, as: UTF8.self)
-        runtime.appJSONOr("ShudengApp.updateHighlight(\(json))", timeout: 30)
+        guard write("ShudengApp.updateHighlight(\(json))", using: runtime) else { return false }
         refresh(using: runtime)
+        return true
+    }
+
+    private func write(_ expression: String, using runtime: RuntimeHost) -> Bool {
+        do {
+            guard try runtime.appJSON(expression, timeout: 30) == "ok" else {
+                throw NSError(domain: "NotesPersistence", code: 1)
+            }
+            error = nil
+            return true
+        } catch {
+            self.error = "操作没能保存到本地，请检查存储空间后重试。"
+            return false
+        }
     }
 }
 
@@ -131,6 +150,17 @@ struct NotesView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
+
+                if let error = store.error {
+                    HStack {
+                        Text(error).font(.footnote)
+                        Spacer()
+                        Button("重试读取") { reload() }
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                    .accessibilityIdentifier("notes.error")
+                }
 
                 Group {
                     if runtime.state != .ready {
@@ -182,15 +212,34 @@ struct NotesView: View {
             .onChange(of: reading.dataVersion) { _, _ in
                 reload()
             }
-            .alert("编辑笔记", isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) {
-                TextField("想法…", text: $noteDraft, axis: .vertical)
-                Button("取消", role: .cancel) { editing = nil }
-                Button("保存") {
-                    if let item = editing {
-                        store.update(highlight: item, note: noteDraft, using: runtime)
+            .sheet(item: $editing) { item in
+                NavigationStack {
+                    Form {
+                        TextField("想法…", text: $noteDraft, axis: .vertical)
+                            .lineLimit(3...12)
+                            .accessibilityIdentifier("notes.editor")
+                        if let error = store.error {
+                            Text(error).font(.footnote).foregroundStyle(.secondary)
+                        }
                     }
-                    editing = nil
+                    .navigationTitle("编辑笔记")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("取消") { editing = nil }
+                        }
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("保存") {
+                                if store.update(highlight: item, note: noteDraft, using: runtime) {
+                                    editing = nil
+                                    reading.markDirty()
+                                }
+                            }
+                            .accessibilityIdentifier("notes.save")
+                        }
+                    }
                 }
+                .presentationDetents([.medium, .large])
             }
             .sheet(item: $share) { item in
                 NavigationStack {

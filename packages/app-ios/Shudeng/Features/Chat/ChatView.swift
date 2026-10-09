@@ -32,6 +32,11 @@ struct ChatView: View {
         .navigationTitle(chat.activeThreadTitle ?? "AI")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("收起") { inputFocused = false }
+                    .accessibilityIdentifier("chat.dismissKeyboard")
+            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 skillMenu
                 Menu {
@@ -57,7 +62,7 @@ struct ChatView: View {
                 chat.setBook(bookId, using: runtime)
             }
         }
-        .sheet(isPresented: $showMindMap) { MindMapSheet() }
+        .sheet(isPresented: $showMindMap) { MindMapSheet(bookId: activeBook?.id) }
         .task {
             chat.attach(to: runtime)
             library.refresh(using: runtime)
@@ -72,8 +77,18 @@ struct ChatView: View {
 
 /// 阅读器里弹出的对话：sheet 里没有导航栏，给它一层导航栈。
 struct ChatSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
-        NavigationStack { ChatView() }
+        NavigationStack {
+            ChatView()
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("完成") { dismiss() }
+                            .accessibilityIdentifier("reader.chat.close")
+                    }
+                }
+        }
     }
 }
 
@@ -94,10 +109,11 @@ struct ChatSheet: View {
         }
         pendingSkill = nil
         let prompt = skill.desc.isEmpty ? skill.name : skill.desc
+        let book = activeBook ?? reading.book
         chat.send(
             prompt,
-            book: reading.book,
-            contextText: reading.promptContext,
+            book: book,
+            contextText: book?.id == reading.book?.id ? reading.promptContext : nil,
             settings: settings,
             skill: skill
         )
@@ -155,12 +171,11 @@ struct ChatSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .onChange(of: chat.messages.last?.text) { _, _ in
-                withAnimation(.linear(duration: 0.1)) {
-                    if chat.isStreaming {
-                        proxy.scrollTo("streaming", anchor: .bottom)
-                    } else if let last = chat.messages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+                // 流式更新时直接定位；逐 token 动画会与懒列表的高度更新反复触发布局。
+                if chat.isStreaming {
+                    proxy.scrollTo("streaming", anchor: .bottom)
+                } else if let last = chat.messages.last {
+                    proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
             // 键盘收不回去是最招人烦的：往下拖正文收、点正文也收。
@@ -253,15 +268,16 @@ struct ChatSheet: View {
                 } else {
                     Button {
                         let text = draft
-                        draft = ""
-                        chat.send(
+                        if chat.send(
                             text,
                             book: activeBook,
                             contextText: contextForSend,
                             settings: settings,
                             skill: pendingSkill
-                        )
-                        pendingSkill = nil
+                        ) {
+                            draft = ""
+                            pendingSkill = nil
+                        }
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.title)
@@ -323,7 +339,12 @@ struct ChatSheet: View {
             Image(systemName: "exclamationmark.triangle.fill")
             Text(text).font(.footnote).lineLimit(4)
             Spacer(minLength: 0)
-            Button("知道了") { chat.error = nil }
+            if chat.hasUnsavedReply {
+                Button("重试保存") { chat.retryPendingReply() }
+                    .accessibilityIdentifier("chat.retrySave")
+            } else {
+                Button("知道了") { chat.error = nil }
+            }
         }
         .padding(10)
         .background(Color.orange.opacity(0.15))

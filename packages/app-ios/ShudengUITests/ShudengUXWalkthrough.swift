@@ -60,6 +60,18 @@ final class ShudengUXWalkthrough: XCTestCase {
         Thread.sleep(forTimeInterval: seconds)
     }
 
+    private func dismissKeyboard() {
+        guard app.keyboards.firstMatch.exists else { return }
+        if app.buttons["chat.dismissKeyboard"].exists {
+            app.buttons["chat.dismissKeyboard"].tap()
+        } else {
+            app.typeText("\n")
+        }
+        if !app.keyboards.firstMatch.waitForNonExistence(timeout: 5) {
+            miss("收起操作后键盘仍遮挡界面")
+        }
+    }
+
     private func bookCover(in target: XCUIApplication, title: String) -> XCUIElement {
         target.buttons
             .matching(identifier: "library.book")
@@ -135,7 +147,10 @@ final class ShudengUXWalkthrough: XCTestCase {
             app.buttons[title].tap()
             pause(1.2)
             snap("08-library-sort-menu")
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.06)).tap()
+            // 选择当前项关闭菜单；点状态栏不会可靠关闭系统菜单。
+            let option = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", title))
+                .allElementsBoundByIndex.first(where: \.isHittable)
+            if let option { option.tap() } else { miss("排序菜单里没有当前项") }
             break
         }
         pause()
@@ -240,13 +255,13 @@ final class ShudengUXWalkthrough: XCTestCase {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.62)).press(forDuration: 1.2)
             if selectionBar.waitForExistence(timeout: 10) {
                 tap(app.buttons["reader.selectionNote"], 5, "写笔记")
-                let alert = app.alerts.firstMatch
-                if alert.waitForExistence(timeout: 8) {
-                    alert.textFields.firstMatch.tap()
-                    alert.textFields.firstMatch.typeText("UX 走查：这段记一下")
+                let noteInput = app.textFields["reader.noteEditor"]
+                if noteInput.waitForExistence(timeout: 8) {
+                    noteInput.tap()
+                    noteInput.typeText("UX 走查：这段记一下")
                     pause()
                     snap("20-note-editor")
-                    alert.buttons["保存"].tap()
+                    app.buttons["reader.noteSave"].tap()
                     pause(1.5)
                     snap("21-after-note")
                 }
@@ -267,8 +282,9 @@ final class ShudengUXWalkthrough: XCTestCase {
             _ = bubble.waitForExistence(timeout: 60)
             pause(3)
             snap("23-reader-ai-answer")
-            app.swipeDown()
-            pause(1.5)
+            tap(app.buttons["reader.chat.close"], 8, "关闭阅读器 AI")
+            XCTAssertTrue(app.textFields["chat.input"].waitForNonExistence(timeout: 10), "阅读器 AI 弹层未关闭")
+            XCTAssertTrue(app.buttons["reader.speech"].isHittable, "朗读按钮被弹层遮挡")
         } else {
             miss("阅读器里的 AI 面板没打开")
         }
@@ -363,6 +379,7 @@ final class ShudengUXWalkthrough: XCTestCase {
         }
 
         // ---------- 5. 笔记 ----------
+        dismissKeyboard()
         tap(app.tabBars.buttons["笔记"], 10, "笔记 Tab")
         _ = app.buttons["notes.export"].waitForExistence(timeout: 20)
         pause(1.5)
@@ -378,6 +395,7 @@ final class ShudengUXWalkthrough: XCTestCase {
         }
 
         // ---------- 6. 我的 / 统计 / 设置 ----------
+        dismissKeyboard()
         tap(app.tabBars.buttons["我的"], 10, "我的 Tab")
         _ = app.buttons["profile.appearance"].waitForExistence(timeout: 20)
         pause()
@@ -417,7 +435,10 @@ final class ShudengUXWalkthrough: XCTestCase {
         }
 
         for title in ["外观", "AI 设置", "语义检索", "关于书灯"] {
-            tap(app.staticTexts[title].firstMatch, 8, title)
+            let entry = title == "外观"
+                ? app.buttons["profile.appearance"]
+                : app.staticTexts[title].firstMatch
+            tap(entry, 8, title)
             let bar = app.navigationBars[title]
             if bar.waitForExistence(timeout: 15) {
                 pause(1.2)
@@ -466,11 +487,12 @@ final class ShudengUXWalkthrough: XCTestCase {
         }
 
         // ---------- 7. PDF ----------
+        dismissKeyboard()
         tap(app.tabBars.buttons["书架"], 8, "书架 Tab（PDF）")
         pause(1.5)
         let pdf = app.buttons
             .matching(identifier: "library.book")
-            .matching(NSPredicate(format: "label CONTAINS %@", "PDF"))
+            .matching(NSPredicate(format: "label CONTAINS[c] %@", "pdf"))
             .firstMatch
         if pdf.waitForExistence(timeout: 15) {
             pdf.tap()

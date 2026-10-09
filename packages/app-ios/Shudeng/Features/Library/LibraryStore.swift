@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import UIKit
+import ImageIO
 
 /// 书库数据源：走 core 的 db 模块（SQLite 文件由 Swift 宿主提供）。
 @MainActor
@@ -132,9 +133,19 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var indexingBookId: String?
     @Published private(set) var indexingProgress: Double = 0
     @Published private(set) var indexError: String?
+    @Published private(set) var pendingIndexDeletion: Book?
 
-    private var coverCache: [String: UIImage] = [:]
+    private let coverCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 32 * 1024 * 1024
+        cache.countLimit = 200
+        return cache
+    }()
+    private let coverQueue = DispatchQueue(label: "shudeng.covers", qos: .userInitiated)
+    private var pendingCovers: Set<String> = []
     private var indexTimer: Timer?
+    /// 建索引请求的代次：终态回调可能比下一次建索引更晚到达。
+    private var indexGeneration = 0
     /// 语义检索的代次：打字快时旧结果不许覆盖新结果。
     private var searchGeneration = 0
 
@@ -194,17 +205,41 @@ final class LibraryStore: ObservableObject {
 
     func refreshIndex(using runtime: RuntimeHost) {
         guard runtime.state == .ready else { return }
-        let json = runtime.appJSONOr("ShudengApp.vectorizedBooks()", fallback: "[]", timeout: 60)
-        indexedBooks = (try? JSONDecoder().decode([VectorizedBook].self, from: Data(json.utf8))) ?? []
+        do {
+            let json = try runtime.appJSON("ShudengApp.vectorizedBooks()", timeout: 60) ?? ""
+            indexedBooks = try JSONDecoder().decode([VectorizedBook].self, from: Data(json.utf8))
+            let available = Set(indexedBooks.filter(\.isVectorized).map(\.bookId))
+            semanticHits.removeAll { !available.contains($0.bookId) }
+            if indexError == "索引读取失败，已保留上次内容，请重试。" { indexError = nil }
+        } catch {
+            indexError = "索引读取失败，已保留上次内容，请重试。"
+        }
     }
 
     func coverImage(for book: Book, root: URL) -> UIImage? {
         guard let relative = book.coverRelativePath, !relative.isEmpty else { return nil }
-        if let cached = coverCache[relative] { return cached }
+        if let cached = coverCache.object(forKey: relative as NSString) { return cached }
+        guard pendingCovers.insert(relative).inserted else { return nil }
         let url = root.appendingPathComponent(relative)
-        guard let data = try? Data(contentsOf: url), let image = UIImage(data: data) else { return nil }
-        coverCache[relative] = image
-        return image
+        coverQueue.async { [weak self] in
+            let options: [CFString: Any] = [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: 768,
+                kCGImageSourceShouldCacheImmediately: true,
+            ]
+            let source = CGImageSourceCreateWithURL(url as CFURL, nil)
+            let thumbnail = source.flatMap { CGImageSourceCreateThumbnailAtIndex($0, 0, options as CFDictionary) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.pendingCovers.remove(relative)
+                guard let thumbnail else { return }
+                self.objectWillChange.send()
+                self.coverCache.setObject(UIImage(cgImage: thumbnail), forKey: relative as NSString,
+                                          cost: thumbnail.bytesPerRow * thumbnail.height)
+            }
+        }
+        return nil
     }
 
     // MARK: - 语义索引
@@ -212,16 +247,20 @@ final class LibraryStore: ObservableObject {
     /// 建 / 重建一本书的语义索引：整本切块 + 端侧向量，进度靠轮询 vectorizeStatus。
     func buildIndex(for book: Book, using runtime: RuntimeHost) {
         guard runtime.state == .ready, indexingBookId == nil else { return }
+        if pendingIndexDeletion?.id == book.id { pendingIndexDeletion = nil }
+        indexGeneration += 1
+        let generation = indexGeneration
         indexError = nil
         indexingBookId = book.id
         indexingProgress = 0
         startIndexPolling(using: runtime)
         runtime.callAsync("ShudengApp.vectorizeBook(\(Self.payload(["bookId": book.id])))", timeout: 900) {
             [weak self] json in
-            guard let self else { return }
+            guard let self, generation == self.indexGeneration else { return }
             if let message = Self.errorMessage(from: json) {
                 self.indexError = "《\(book.title)》建索引失败：\(message)"
             }
+            self.indexGeneration += 1
             self.indexingBookId = nil
             self.stopIndexPolling()
             self.refresh(using: runtime)
@@ -230,20 +269,41 @@ final class LibraryStore: ObservableObject {
 
     func deleteIndex(for book: Book, using runtime: RuntimeHost) {
         guard runtime.state == .ready else { return }
-        _ = runtime.appJSONOr(
-            "ShudengApp.deleteVectors(\(Self.payload(["bookId": book.id])))",
-            fallback: "{}",
-            timeout: 60
-        )
+        do {
+            let json = try runtime.appJSON(
+                "ShudengApp.deleteVectors(\(Self.payload(["bookId": book.id])))",
+                timeout: 60
+            ) ?? ""
+            struct Receipt: Decodable { let ok: Bool }
+            guard try JSONDecoder().decode(Receipt.self, from: Data(json.utf8)).ok else {
+                throw NSError(domain: "IndexPersistence", code: 1)
+            }
+        } catch {
+            pendingIndexDeletion = book
+            // 删除前可能已经取消了后台建索引，失败后仍需同步任务状态。
+            pollIndexStatus(using: runtime)
+            refreshIndex(using: runtime)
+            indexError = "《\(book.title)》索引删除未全部完成，请重试。"
+            return
+        }
+        if indexingBookId == book.id {
+            indexGeneration += 1
+            indexingBookId = nil
+            indexingProgress = 0
+            stopIndexPolling()
+        }
+        if pendingIndexDeletion?.id == book.id { pendingIndexDeletion = nil }
+        indexError = nil
         semanticHits = []
         refresh(using: runtime)
     }
 
     private func startIndexPolling(using runtime: RuntimeHost) {
         stopIndexPolling()
+        let generation = indexGeneration
         let timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.indexingBookId != nil else { return }
+                guard let self, generation == self.indexGeneration, self.indexingBookId != nil else { return }
                 self.pollIndexStatus(using: runtime)
             }
         }
@@ -259,15 +319,22 @@ final class LibraryStore: ObservableObject {
         let json = runtime.appJSONOr("ShudengApp.vectorizeStatus()", fallback: "{}", timeout: 30)
         guard let status = try? JSONDecoder().decode(IndexStatus.self, from: Data(json.utf8)) else { return }
         switch status.status {
+        case "idle":
+            indexGeneration += 1
+            indexingBookId = nil
+            indexingProgress = 0
+            stopIndexPolling()
         case "running":
             indexingBookId = status.bookId ?? indexingBookId
             indexingProgress = status.progress
         case "done":
+            indexGeneration += 1
             indexingBookId = nil
             indexingProgress = 1
             stopIndexPolling()
             refresh(using: runtime)
         case "error":
+            indexGeneration += 1
             indexingBookId = nil
             stopIndexPolling()
             if let message = status.error {
@@ -285,12 +352,15 @@ final class LibraryStore: ObservableObject {
         searchGeneration += 1
         let generation = searchGeneration
         guard runtime.state == .ready, trimmed.count >= 2, !indexedBooks.isEmpty else {
+            isSearchingSemantics = false
             semanticHits = []
             semanticFailures = []
             return
         }
         isSearchingSemantics = true
-        defer { isSearchingSemantics = false }
+        defer {
+            if generation == searchGeneration { isSearchingSemantics = false }
+        }
 
         struct Response: Decodable {
             let results: [SemanticHit]
@@ -302,12 +372,12 @@ final class LibraryStore: ObservableObject {
                 timeout: 60
             ) { continuation.resume(returning: $0) }
         }
+        guard generation == searchGeneration else { return }
         guard let response = try? JSONDecoder().decode(Response.self, from: Data(json.utf8)) else {
             semanticHits = []
             semanticFailures = []
             return
         }
-        guard generation == searchGeneration else { return }
         semanticHits = response.results
         semanticFailures = response.errors
     }
@@ -338,12 +408,13 @@ final class LibraryStore: ObservableObject {
         let json = String(decoding: data, as: UTF8.self)
         do {
             _ = try runtime.appJSON("ShudengApp.deleteBook(\(json))", timeout: 60)
+            if pendingIndexDeletion?.id == book.id { pendingIndexDeletion = nil }
             let fileURL = runtime.rootDirectory.appendingPathComponent(book.filePath)
             try? FileManager.default.removeItem(at: fileURL)
             if let cover = book.coverRelativePath {
                 try? FileManager.default.removeItem(at: runtime.rootDirectory.appendingPathComponent(cover))
             }
-            coverCache = coverCache.filter { $0.key != book.coverRelativePath }
+            if let cover = book.coverRelativePath { coverCache.removeObject(forKey: cover as NSString) }
             refresh(using: runtime)
         } catch {
             self.error = String(describing: error)

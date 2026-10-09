@@ -134,7 +134,7 @@ enum MindMapLayout {
             let children = hidden ? [] : node.children
 
             var centers: [CGFloat] = []
-            var childLeft = left + size.width + hGap
+            let childLeft = left + size.width + hGap
             var childBottom: CGFloat = 0
 
             for child in children {
@@ -317,6 +317,7 @@ struct MindMapCanvas: View {
 
 /// 思维导图弹层：问一次模型拿 Markdown 大纲，画成导图，可换范围重新生成。
 struct MindMapSheet: View {
+    let bookId: String?
     enum Scope: String, CaseIterable, Identifiable {
         case chapter
         case page
@@ -346,6 +347,7 @@ struct MindMapSheet: View {
     @State private var phase: Phase = .loading
     @State private var outline = ""
     @State private var copied = false
+    @State private var generation = 0
 
     var body: some View {
         NavigationStack {
@@ -422,10 +424,19 @@ struct MindMapSheet: View {
             }
             .task { if case .loading = phase { generate() } }
             .onChange(of: scope) { _, _ in generate() }
+            .onDisappear { generation += 1 }
         }
     }
 
     private func generate() {
+        generation += 1
+        let requestGeneration = generation
+        outline = ""
+        copied = false
+        guard bookId == nil || bookId == reading.book?.id else {
+            phase = .failed("先打开会话关联的书，再生成导图")
+            return
+        }
         guard aiSettings.isConfigured else {
             phase = .failed("先在「我的 → AI 设置」里配好端点")
             return
@@ -459,6 +470,7 @@ struct MindMapSheet: View {
         }
 
         runtime.callAsync("ShudengApp.mindmap(\(json))", timeout: 180) { raw in
+            guard generation == requestGeneration else { return }
             guard let data = raw.data(using: .utf8),
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else {

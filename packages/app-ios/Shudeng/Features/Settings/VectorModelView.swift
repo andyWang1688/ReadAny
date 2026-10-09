@@ -6,9 +6,22 @@ struct VectorModelView: View {
     @EnvironmentObject private var runtime: RuntimeHost
     @State private var info: LibraryStore.EmbeddingInfo?
     @State private var books: [LibraryStore.VectorizedBook] = []
+    @State private var error: String?
+    @State private var pendingRemoval: LibraryStore.VectorizedBook?
 
     var body: some View {
         List {
+            if let error {
+                Section {
+                    Text(error).font(.footnote).foregroundStyle(.secondary)
+                    Button("重试读取") { load() }
+                }
+                .accessibilityIdentifier("vector.error")
+            }
+            if let pendingRemoval {
+                Button("重试删除《\(pendingRemoval.title)》索引") { remove(pendingRemoval) }
+                    .accessibilityIdentifier("vector.retryRemoval")
+            }
             Section {
                 if let info {
                     if info.available {
@@ -67,8 +80,13 @@ struct VectorModelView: View {
 
     private func load() {
         info = LibraryStore.embeddingInfo(using: runtime)
-        let json = runtime.appJSONOr("ShudengApp.vectorizedBooks()", fallback: "[]", timeout: 60)
-        books = (try? JSONDecoder().decode([LibraryStore.VectorizedBook].self, from: Data(json.utf8))) ?? []
+        do {
+            let json = try runtime.appJSON("ShudengApp.vectorizedBooks()", timeout: 60) ?? ""
+            books = try JSONDecoder().decode([LibraryStore.VectorizedBook].self, from: Data(json.utf8))
+            error = nil
+        } catch {
+            self.error = "索引读取失败，已保留上次内容，请重试。"
+        }
     }
 
     private func statusText(_ info: LibraryStore.EmbeddingInfo) -> String {
@@ -77,11 +95,23 @@ struct VectorModelView: View {
     }
 
     private func remove(_ book: LibraryStore.VectorizedBook) {
-        _ = runtime.appJSONOr(
-            "ShudengApp.deleteVectors(\(LibraryStore.payload(["bookId": book.bookId])))",
-            fallback: "{}",
-            timeout: 60
-        )
+        do {
+            let json = try runtime.appJSON(
+                "ShudengApp.deleteVectors(\(LibraryStore.payload(["bookId": book.bookId])))",
+                timeout: 60
+            ) ?? ""
+            struct Receipt: Decodable { let ok: Bool }
+            guard try JSONDecoder().decode(Receipt.self, from: Data(json.utf8)).ok else {
+                throw NSError(domain: "IndexPersistence", code: 1)
+            }
+        } catch {
+            pendingRemoval = book
+            load()
+            self.error = "《\(book.title)》索引删除未全部完成，请重试。"
+            return
+        }
+        pendingRemoval = nil
+        books.removeAll { $0.bookId == book.bookId }
         load()
     }
 }
