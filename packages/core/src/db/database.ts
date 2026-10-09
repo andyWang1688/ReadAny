@@ -105,6 +105,8 @@ export {
   insertChunks,
   deleteChunks,
   getVectorIndexProvenance,
+  getVectorIndexProvenances,
+  getAvailableVectorIndexProvenances,
   setVectorIndexProvenance,
   deleteVectorIndexProvenance,
   clearVectorizationFlagsWithoutLocalChunks,

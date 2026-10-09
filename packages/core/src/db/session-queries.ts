@@ -60,7 +60,7 @@ export async function insertReadingSession(session: ReadingSession): Promise<voi
   const deviceId = await getDeviceId();
   const syncVersion = await nextSyncVersion(database, "reading_sessions");
   await database.execute(
-    "INSERT INTO reading_sessions (id, book_id, started_at, ended_at, total_active_time, pages_read, characters_read, state, updated_at, sync_version, last_modified_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO reading_sessions (id, book_id, started_at, ended_at, total_active_time, pages_read, characters_read, state, updated_at, sync_version, last_modified_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
     [
       session.id,
       session.bookId,

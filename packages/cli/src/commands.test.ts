@@ -243,6 +243,13 @@ async function seedVectorLibrary(dataRoot: string): Promise<void> {
       x'0000803f0000000000000000', 6000
     );
   `);
+  // Semantic search requires the model identity that produced these vectors.
+  localDb.exec(`
+    INSERT INTO vector_index_provenance
+      (book_id, model_kind, model_id, endpoint, dimensions, created_at)
+    VALUES ('vector-book', 'remote', 'test-embedding',
+      'http://localhost:1234/v1/embeddings', 3, 6000);
+  `);
   localDb.close();
 }
 
@@ -2779,7 +2786,7 @@ describe("commands", () => {
           READANY_EMBEDDING_BASE_URL: "http://localhost:1234/v1",
         },
       );
-      expect(result.ok).toBe(true);
+      expect(result.ok, JSON.stringify(result)).toBe(true);
       if (!result.ok) return;
       expect(result.data.results[0]).toMatchObject({
         matchType: "vector",

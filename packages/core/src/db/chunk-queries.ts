@@ -1,5 +1,5 @@
 import type { Chunk, VectorIndexProvenance } from "../types";
-import { getDB, getLocalDB, serializeEmbedding, deserializeEmbedding } from "./db-core";
+import { deserializeEmbedding, getDB, getLocalDB, serializeEmbedding } from "./db-core";
 
 export async function getChunks(bookId: string): Promise<Chunk[]> {
   const database = await getLocalDB();
@@ -57,18 +57,16 @@ export async function deleteChunks(bookId: string): Promise<void> {
   await database.execute("DELETE FROM chunks WHERE book_id = ?", [bookId]);
 }
 
-export async function getVectorIndexProvenance(bookId: string): Promise<VectorIndexProvenance | null> {
-  const database = await getLocalDB();
-  const rows = await database.select<{
-    book_id: string;
-    model_kind: "builtin" | "remote";
-    model_id: string;
-    endpoint: string | null;
-    dimensions: number;
-    created_at: number;
-  }>("SELECT * FROM vector_index_provenance WHERE book_id = ?", [bookId]);
-  const row = rows[0];
-  if (!row) return null;
+interface VectorIndexProvenanceRow {
+  book_id: string;
+  model_kind: "builtin" | "remote";
+  model_id: string;
+  endpoint: string | null;
+  dimensions: number;
+  created_at: number;
+}
+
+function mapVectorIndexProvenance(row: VectorIndexProvenanceRow): VectorIndexProvenance {
   return {
     bookId: row.book_id,
     kind: row.model_kind,
@@ -77,6 +75,35 @@ export async function getVectorIndexProvenance(bookId: string): Promise<VectorIn
     dimensions: row.dimensions,
     createdAt: row.created_at,
   };
+}
+
+export async function getVectorIndexProvenance(
+  bookId: string,
+): Promise<VectorIndexProvenance | null> {
+  const database = await getLocalDB();
+  const rows = await database.select<VectorIndexProvenanceRow>(
+    "SELECT * FROM vector_index_provenance WHERE book_id = ?",
+    [bookId],
+  );
+  return rows[0] ? mapVectorIndexProvenance(rows[0]) : null;
+}
+
+export async function getVectorIndexProvenances(): Promise<VectorIndexProvenance[]> {
+  const database = await getLocalDB();
+  const rows = await database.select<VectorIndexProvenanceRow>(
+    "SELECT * FROM vector_index_provenance",
+  );
+  return rows.map(mapVectorIndexProvenance);
+}
+
+/** Local index facts: provenance is usable only while this device still has chunks. */
+export async function getAvailableVectorIndexProvenances(): Promise<VectorIndexProvenance[]> {
+  const database = await getLocalDB();
+  const rows = await database.select<VectorIndexProvenanceRow>(
+    `SELECT * FROM vector_index_provenance
+     WHERE EXISTS (SELECT 1 FROM chunks WHERE chunks.book_id = vector_index_provenance.book_id)`,
+  );
+  return rows.map(mapVectorIndexProvenance);
 }
 
 export async function setVectorIndexProvenance(provenance: VectorIndexProvenance): Promise<void> {

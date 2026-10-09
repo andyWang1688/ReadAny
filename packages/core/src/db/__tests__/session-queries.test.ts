@@ -158,6 +158,7 @@ describe("session-queries", () => {
 
       const [sql, params] = mockExecute.mock.calls[0];
       expect(sql).toContain("INSERT INTO reading_sessions");
+      expect(sql).toContain("ON CONFLICT(id) DO NOTHING");
       expect(params[0]).toBe("session-1");
       expect(params[1]).toBe("book-1");
       expect(params[2]).toBe(1000); // startedAt

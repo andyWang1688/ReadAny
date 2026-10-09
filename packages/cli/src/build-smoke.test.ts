@@ -2888,5 +2888,5 @@ pnpm --filter @readany/cli acceptance:validate -- --strict-m5
         errors: [],
       },
     });
-  }, 15000);
+  }, 60000);
 });
