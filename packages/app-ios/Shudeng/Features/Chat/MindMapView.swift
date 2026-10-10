@@ -129,7 +129,7 @@ enum MindMapLayout {
 
         @discardableResult
         func walk(_ node: MindNode, depth: Int, left: CGFloat) -> (centerY: CGFloat, top: CGFloat, bottom: CGFloat) {
-            let size = self.size(of: node.title, depth: depth)
+            let size = self.size(of: node.title, depth: depth, hasChildren: !node.children.isEmpty)
             let hidden = collapsed.contains(node.id)
             let children = hidden ? [] : node.children
 
@@ -182,15 +182,20 @@ enum MindMapLayout {
         return result
     }
 
-    static func size(of title: String, depth: Int) -> CGSize {
+    static func size(of title: String, depth: Int, hasChildren: Bool) -> CGSize {
         let font = font(depth: depth)
         let maxTextWidth: CGFloat = depth == 0 ? 190 : 170
         let attributes: [NSAttributedString.Key: Any] = [.font: font]
-        let measured = (title as NSString).size(withAttributes: attributes)
-        let width = min(measured.width + 26, maxTextWidth + 26)
-        let lines = max(1, Int(ceil(measured.width / maxTextWidth)))
-        let height = CGFloat(lines) * (font.lineHeight + 1) + 14
-        return CGSize(width: max(width, 64), height: max(height, 34))
+        let textWidth = min(ceil((title as NSString).size(withAttributes: attributes).width), maxTextWidth)
+        let bounds = (title as NSString).boundingRect(
+            with: CGSize(width: max(textWidth, 1), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes,
+            context: nil
+        )
+        // 与节点 HStack 保持一致：左右内边距 24，展开图标及间距 17。
+        let width = textWidth + 24 + (hasChildren ? 17 : 0)
+        return CGSize(width: max(width, 64), height: max(ceil(bounds.height) + 14, 34))
     }
 
     static func font(depth: Int) -> UIFont {
@@ -219,6 +224,10 @@ struct MindMapCanvas: View {
     var body: some View {
         GeometryReader { geo in
             let result = layout
+            let fitScale = min(1, min(max(geo.size.width - 32, 1) / result.size.width,
+                                      max(geo.size.height - 32, 1) / result.size.height))
+            let fitOffset = CGSize(width: (geo.size.width - result.size.width * fitScale) / 2,
+                                   height: (geo.size.height - result.size.height * fitScale) / 2)
             ZStack(alignment: .topLeading) {
                 Canvas { context, _ in
                     for edge in result.edges {
@@ -244,7 +253,7 @@ struct MindMapCanvas: View {
             .frame(width: result.size.width, height: result.size.height, alignment: .topLeading)
             .scaleEffect(scale, anchor: .topLeading)
             .offset(offset)
-            .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture()
@@ -259,11 +268,22 @@ struct MindMapCanvas: View {
             .simultaneousGesture(
                 MagnifyGesture()
                     .onChanged { value in
-                        scale = min(max(lastScale * value.magnification, 0.4), 3)
+                        scale = min(max(lastScale * value.magnification, min(0.4, fitScale)), 3)
                     }
                     .onEnded { _ in lastScale = scale }
             )
-            .onAppear { scale = 1; lastScale = 1 }
+            .onAppear {
+                scale = fitScale
+                lastScale = fitScale
+                offset = fitOffset
+                lastOffset = fitOffset
+            }
+            .onChange(of: geo.size) { _, _ in
+                scale = fitScale
+                lastScale = fitScale
+                offset = fitOffset
+                lastOffset = fitOffset
+            }
         }
     }
 
@@ -283,15 +303,17 @@ struct MindMapCanvas: View {
                     .foregroundStyle(isRoot ? Color(.systemBackground) : Color.primary)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: node.size.width - 24 - (node.hasChildren ? 17 : 0), alignment: .leading)
                 if node.hasChildren {
                     Image(systemName: node.collapsed ? "plus.circle" : "minus.circle")
                         .font(.system(size: 11))
+                        .frame(width: 11)
                         .foregroundStyle(isRoot ? Color(.systemBackground).opacity(0.7) : Color.secondary)
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .frame(width: node.size.width, height: node.size.height, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(isRoot ? Color.primary : Color(.secondarySystemBackground))
@@ -387,19 +409,21 @@ struct MindMapSheet: View {
                         )
                 }
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                Picker("范围", selection: $scope) {
+                    ForEach(Scope.allCases) { item in
+                        Text(item.label).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("mindmap.scope")
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.bar)
+            }
             .navigationTitle("思维导图")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Picker("范围", selection: $scope) {
-                        ForEach(Scope.allCases) { item in
-                            Text(item.label).tag(item)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 140)
-                    .accessibilityIdentifier("mindmap.scope")
-                }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {
                         UIPasteboard.general.string = outline

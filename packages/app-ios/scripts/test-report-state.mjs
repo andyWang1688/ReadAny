@@ -14,10 +14,13 @@ const method = source
   )
   .replace("private func generate", "func generate")
   .replace("{ result in", "{ [self] result in");
+const comparison = source.slice(source.indexOf("struct ReportComparison:"), source.indexOf("struct ReportPayload:"));
+const deltaMethod = source.slice(source.indexOf("    private func deltaText("), source.indexOf("    /// 同一年只写一次年份")).replace("private func deltaText", "func deltaText");
 const scratch = mkdtempSync(join(tmpdir(), "report-state-"));
 process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
 const harness = `
 import Foundation
+${comparison}
 struct ReportPayload {}
 enum ReadingReportRange { case week, month }
 struct Settings { enum Provider: String { case openai }; let provider = Provider.openai; let isConfigured = true; let apiKey = "fixture", baseURL = "fixture", model = "fixture" }
@@ -30,6 +33,7 @@ var aiText: [ReadingReportRange:String] = [:]
 var isGenerating = false
 func aiPrompt(_ payload:ReportPayload)->String { "fixture" }
 ${method}
+${deltaMethod}
 }
 var failures = 0
 func expect(_ condition:Bool,_ text:String) { if !condition { failures += 1; print("FAIL: " + text) } }
@@ -48,8 +52,21 @@ report.generate(ReportPayload())
 report.range = .month
 report.runtime.callbacks[0](#"{"text":"week report"}"#)
 expect(report.aiText[.week] == "week report" && report.aiText[.month] == nil,"success must stay cached under requested range")
+let growth = ReportComparison(label: "readingTime", value: 40, delta: 1359, deltaLabel: "+1359%")
+expect(report.deltaText(growth) == "增加 1359%", "report must show percentage units for growth")
+let first = ReportComparison(label: "readingTime", value: 10, delta: 100, deltaLabel: "+∞")
+expect(report.deltaText(first) == "上期为 0", "zero baseline cannot be shown as 100 percent growth")
+let decline = ReportComparison(label: "activeDays", value: 2, delta: -50, deltaLabel: "-50%")
+expect(report.deltaText(decline) == "减少 50%", "negative comparison must remain clear")
+expect(report.deltaText(ReportComparison(label: "sessions", value: 2, delta: 0, deltaLabel: "—")) == "持平", "zero change should read as unchanged")
+expect(growth.displayName == "阅读时长" && growth.formattedValue == "40 分钟", "reading duration label and units must be readable")
+expect(decline.displayName == "阅读天数" && decline.formattedValue == "2 天", "active days require day units")
+for (key, title, unit) in [("sessions", "阅读次数", "次"), ("books", "读过的书", "本"), ("avgSessionTime", "平均单次时长", "分钟")] {
+let metric = ReportComparison(label: key, value: 3, delta: nil, deltaLabel: "")
+expect(metric.displayName == title && metric.formattedValue == "3 " + unit, "all comparison metrics must use reader-facing labels and units")
+}
 guard failures == 0 else { exit(1) }
-print("Report state regression passed (7 checks)")
+print("Report state regression passed (16 checks)")
 `;
 writeFileSync(join(scratch, "main.swift"), harness);
 execFileSync(

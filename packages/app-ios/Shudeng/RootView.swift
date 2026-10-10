@@ -32,6 +32,8 @@ struct RootView: View {
         .safeAreaInset(edge: .top) { readingSaveError }
         .fullScreenCover(isPresented: $reading.isReaderPresented) {
             ReaderScreen()
+                .preferredColorScheme(settings.readerTheme == .ink ? .dark : .light)
+                .tint(settings.accent.color)
                 .environmentObject(reading)
                 // 阅读器里的 AI 弹层要用同一段对话；少注入这一层，点 ✨ 会直接闪退。
                 .environmentObject(chat)

@@ -7,6 +7,7 @@ struct LibraryView: View {
     @EnvironmentObject private var reading: ReadingSession
     @StateObject private var store = LibraryStore()
     @State private var showImporter = false
+    @State private var bookToDelete: LibraryStore.Book?
     /// 搜索框焦点：键盘上的「收起键盘」和点空白处都要能把它放掉。
     @FocusState private var searchFocused: Bool
 
@@ -80,6 +81,15 @@ struct LibraryView: View {
                 case .failure(let error):
                     store.report(error)
                 }
+            }
+            .alert("删除《\(bookToDelete?.title ?? "")》？", isPresented: Binding(
+                get: { bookToDelete != nil },
+                set: { if !$0 { bookToDelete = nil } }
+            ), presenting: bookToDelete) { book in
+                Button("取消", role: .cancel) {}
+                Button("删除", role: .destructive) { store.delete(book, using: runtime) }
+            } message: { _ in
+                Text("将同时删除这本书的高亮、笔记、书签、聊天和阅读记录，无法撤销。")
             }
             .task { store.refresh(using: runtime) }
             .task(id: store.query) {
@@ -294,7 +304,7 @@ struct LibraryView: View {
                 }
             }
             Button("从书库删除", systemImage: "trash", role: .destructive) {
-                store.delete(book, using: runtime)
+                bookToDelete = book
             }
         }
     }

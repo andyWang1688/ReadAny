@@ -6,6 +6,7 @@ import Foundation
 final class AISettings: ObservableObject {
     enum Provider: String, CaseIterable, Identifiable {
         case openai
+        case deepseek
         case anthropic
         case google
         case custom
@@ -15,6 +16,7 @@ final class AISettings: ObservableObject {
         var label: String {
             switch self {
             case .openai: "OpenAI 兼容"
+            case .deepseek: "DeepSeek"
             case .anthropic: "Anthropic"
             case .google: "Gemini"
             case .custom: "自定义（OpenAI 兼容）"
@@ -24,9 +26,17 @@ final class AISettings: ObservableObject {
         var defaultBaseURL: String {
             switch self {
             case .openai: "https://api.openai.com/v1"
+            case .deepseek: "https://api.deepseek.com"
             case .anthropic: "https://api.anthropic.com"
             case .google: "https://generativelanguage.googleapis.com/v1beta/openai"
             case .custom: ""
+            }
+        }
+
+        var defaultModel: String {
+            switch self {
+            case .deepseek: "deepseek-flash"
+            default: ""
             }
         }
     }
@@ -61,8 +71,9 @@ final class AISettings: ObservableObject {
             apiKey = environment["SHUDENG_AI_API_KEY"] ?? ""
         } else {
             let storedProvider = defaults.string(forKey: Keys.provider).flatMap(Provider.init(rawValue:)) ?? .openai
+            let storedBaseURL = defaults.string(forKey: Keys.baseURL) ?? storedProvider.defaultBaseURL
             provider = storedProvider
-            baseURL = defaults.string(forKey: Keys.baseURL) ?? storedProvider.defaultBaseURL
+            baseURL = storedBaseURL
             model = defaults.string(forKey: Keys.model) ?? ""
             do {
                 apiKey = try Keychain.get(Keys.apiKey)
@@ -103,8 +114,31 @@ final class AISettings: ObservableObject {
         }
     }
 
-    var isConfigured: Bool {
-        !model.trimmingCharacters(in: .whitespaces).isEmpty
-            && !baseURL.trimmingCharacters(in: .whitespaces).isEmpty
+    var configurationIssue: String? {
+        let address = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if address.isEmpty { return "请填写 AI 服务地址" }
+        guard !address.contains(where: { $0.isWhitespace }),
+              let url = URLComponents(string: address),
+              ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+              let host = url.host, !host.isEmpty else {
+            return "服务地址需要以 https:// 或 http:// 开头，并包含完整域名"
+        }
+        if model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "请填写模型名称"
+        }
+        return nil
     }
+
+    /// 切换预设服务时更新地址；只有已知默认模型才覆盖旧值，避免误用 DeepSeek 专属模型。
+    func applyProviderDefaults(for provider: Provider) {
+        guard provider != .custom else { return }
+        baseURL = provider.defaultBaseURL
+        if !provider.defaultModel.isEmpty {
+            model = provider.defaultModel
+        } else if model == Provider.deepseek.defaultModel {
+            model = ""
+        }
+    }
+
+    var isConfigured: Bool { configurationIssue == nil }
 }

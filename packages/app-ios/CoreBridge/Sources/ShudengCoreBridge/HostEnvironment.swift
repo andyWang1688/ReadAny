@@ -100,10 +100,10 @@ public final class HostEnvironment {
                 : LocalEmbedding.embed(batch, usingModelId: modelId)
             guard let output else {
                 let reason = modelId.isEmpty
-                    ? "这台设备上没有可用的端侧向量模型"
-                    : "端侧向量模型 \(modelId) 现在取不到向量"
+                    ? "当前设备缺少可用的系统语言模型，暂时无法建立语义索引"
+                    : "这本书使用的系统语言模型暂不可用，请稍后重试"
                 return Self.jsonString([
-                    "error": "\(reason)（\(LocalEmbedding.diagnostics())）",
+                    "error": reason,
                     "diagnostics": LocalEmbedding.diagnostics(),
                 ])
             }

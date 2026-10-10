@@ -8,6 +8,7 @@ final class ShudengUXDriver: XCTestCase {
     private var app: XCUIApplication!
     private var outDir: URL!
     private var log: [String] = []
+    private var useSavedAI = false
 
     private let hostDir = "/private/tmp/shudeng-ux"
 
@@ -39,6 +40,50 @@ final class ShudengUXDriver: XCTestCase {
         )
     }
 
+    /// 显式启动的模拟器人工走查通道；普通测试运行直接跳过。
+    func testInteractiveDrive() throws {
+        #if targetEnvironment(simulator)
+        let directory = URL(fileURLWithPath: hostDir + "/live")
+        let start = directory.appendingPathComponent("start")
+        let fm = FileManager.default
+        guard let attributes = try? fm.attributesOfItem(atPath: start.path),
+              let modified = attributes[.modificationDate] as? Date,
+              Date().timeIntervalSince(modified) < 120 else {
+            throw XCTSkip("未请求交互走查")
+        }
+        useSavedAI = (try? String(contentsOf: start, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) == "real"
+        try fm.removeItem(at: start)
+        continueAfterFailure = false
+        outDir = directory
+        app = makeApp(fresh: false, aiDead: false)
+        app.launch()
+        report("ready")
+        shot("ready")
+        try "ready".write(to: directory.appendingPathComponent("ready"), atomically: true, encoding: .utf8)
+        var sequence = 1
+        let deadline = Date().addingTimeInterval(1800)
+        while Date() < deadline {
+            let command = directory.appendingPathComponent("\(sequence).command")
+            guard let script = try? String(contentsOf: command, encoding: .utf8) else {
+                Thread.sleep(forTimeInterval: 0.1)
+                continue
+            }
+            if script.trimmingCharacters(in: .whitespacesAndNewlines) == "stop" { return }
+            let started = Date()
+            for line in script.split(separator: "\n") { run(String(line)) }
+            report("\(sequence)")
+            shot("\(sequence)")
+            let elapsed = Date().timeIntervalSince(started)
+            try String(format: "%.2f seconds", elapsed).write(
+                to: directory.appendingPathComponent("\(sequence).done"), atomically: true, encoding: .utf8
+            )
+            sequence += 1
+        }
+        #else
+        throw XCTSkip("交互走查只运行于模拟器")
+        #endif
+    }
+
     // MARK: - 指令
 
     private func run(_ line: String) {
@@ -48,6 +93,7 @@ final class ShudengUXDriver: XCTestCase {
         switch cmd {
         case "launch":
             app = makeApp(fresh: arg.contains("fresh"), aiDead: arg.contains("ai-dead"))
+            if arg.contains("unconfigured") { app.launchEnvironment["SHUDENG_AI_BASE_URL"] = "" }
             app.launch()
             say("launched")
         case "shot":
@@ -61,13 +107,23 @@ final class ShudengUXDriver: XCTestCase {
             longPress(arg)
         case "swipe":
             swipe(arg)
+        case "slider":
+            app.sliders.firstMatch.adjust(toNormalizedSliderPosition: CGFloat(Double(arg) ?? 0.5))
+            say("slider \(arg)")
+        case "pinch":
+            app.pinch(withScale: CGFloat(Double(arg) ?? 1), velocity: 1)
+            say("pinch \(arg)")
         case "type":
             app.typeText(arg)
             say("typed \(arg)")
         case "controls":
             setControls(want: arg == "on")
         case "key":
-            app.typeKey(keyCode(arg), modifierFlags: [])
+            if arg == "Return" || arg == "Enter" {
+                app.typeText("\n")
+            } else {
+                app.typeKey(keyCode(arg), modifierFlags: [])
+            }
             say("key \(arg)")
         case "dump":
             dumpTree()
@@ -133,7 +189,7 @@ final class ShudengUXDriver: XCTestCase {
     }
 
     private func swipe(_ spec: String) {
-        let bits = spec.split(separator: " ")
+        let bits = spec.split(separator: " ", maxSplits: 1)
         let direction = String(bits[0])
         let target: XCUIElement = bits.count > 1 ? (resolve(String(bits[1])) ?? app) : app
         switch direction {
@@ -196,9 +252,9 @@ final class ShudengUXDriver: XCTestCase {
         }
         if spec.hasPrefix("field:") {
             let label = String(spec.dropFirst(6))
-            return app.textFields.matching(
-                NSPredicate(format: "label CONTAINS %@ OR placeholderValue CONTAINS %@", label, label)
-            ).firstMatch
+            let predicate = NSPredicate(format: "label CONTAINS %@ OR placeholderValue CONTAINS %@", label, label)
+            let search = app.searchFields.matching(predicate).firstMatch
+            return search.exists ? search : app.textFields.matching(predicate).firstMatch
         }
         return nil
     }
@@ -238,7 +294,7 @@ final class ShudengUXDriver: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += ["-shudeng.onboarded", fresh ? "NO" : "YES"]
         let isSimulator = ProcessInfo.processInfo.environment["SIMULATOR_UDID"] != nil
-        if isSimulator {
+        if isSimulator && !useSavedAI {
             app.launchEnvironment["SHUDENG_SEED_SAMPLE_BOOK"] = "1"
             app.launchEnvironment["SHUDENG_SEED_SAMPLE_BOOK_EN"] = "1"
             app.launchEnvironment["SHUDENG_SEED_SAMPLE_PDF"] = "1"

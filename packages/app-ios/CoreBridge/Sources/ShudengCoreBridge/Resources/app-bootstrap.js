@@ -298,13 +298,14 @@
       name: payload.name || "iOS",
       provider: payload.provider || "openai",
       apiKey: payload.apiKey || "",
-      baseUrl: payload.baseUrl || "",
-      models: [payload.model],
+      baseUrl: String(payload.baseUrl || "").trim(),
+      models: [String(payload.model || "").trim()],
       modelsFetched: true,
     };
   }
 
   async function modelFor(endpoint, model, options = {}) {
+    model = String(model || "").trim();
     const key = JSON.stringify([endpoint.baseUrl, endpoint.apiKey, endpoint.provider, model, options]);
     const cached = chatModels.get(key);
     if (cached) return cached;
@@ -386,6 +387,7 @@
       core.rag.invalidateChunkCache(bookId);
       if (removeBook) {
         await core.db.deleteBook(bookId, { preserveData: false });
+        hostKv("remove", `reader.scrollResume.${bookId}`);
       } else {
         await core.db.updateBook(bookId, { isVectorized: false, vectorizeProgress: 0 });
       }
@@ -424,7 +426,7 @@
     async listBooks() {
       await bootstrap();
       const books = await core.db.getBooks();
-      return toJSON(books);
+      return toJSON(books.map(book => ({ ...book, scrollResume: hostKv("get", `reader.scrollResume.${book.id}`).value || null })));
     },
 
     async bookCount() {
@@ -530,6 +532,11 @@
         updates.progress = Math.min(1, Math.max(0, Number(payload.progress)));
       if (payload.cfi) updates.currentCfi = String(payload.cfi);
       await core.db.updateBook(String(payload.bookId), updates);
+      // Optional pixel refinement is paired with its CFI. If a write is interrupted,
+      // a stale pair is ignored by the reader and the canonical CFI still works.
+      const resumeKey = `reader.scrollResume.${payload.bookId}`;
+      if (payload.scrollResume) hostKv("set", resumeKey, payload.scrollResume);
+      else hostKv("remove", resumeKey);
       return "ok";
     },
 
@@ -1452,12 +1459,15 @@
           else forwardBody(tail);
         }
         flushBody();
-        // 整段回答都是工具调用标记时界面会是一片空白：给读者一句能看懂的话。
-        if (!bodyEmitted) {
+        // 没有正文是失败；错误说明不能作为助手回答落库。主动停止仍走 done。
+        if (!bodyEmitted && !controller.signal.aborted) {
           emitChat(requestId, {
-            type: "chunk",
-            text: droppedToolMarkup ? toolMarkupFallback : "模型这次没有返回内容，再发一次试试。",
+            type: "error",
+            message: droppedToolMarkup
+              ? "模型只返回了工具调用指令，没有可读回答。请重试，或在 AI 设置中换个模型。"
+              : "模型没有返回可读回答，请重试。",
           });
+          return "error";
         }
 
         emitChat(requestId, { type: "done", aborted: controller.signal.aborted === true });

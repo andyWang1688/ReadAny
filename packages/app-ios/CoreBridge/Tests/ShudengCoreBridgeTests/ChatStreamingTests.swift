@@ -67,7 +67,7 @@ final class ChatStreamingTests: XCTestCase {
     }
 
     /// 模型偶尔会把工具调用标记当正文吐出来（DeepSeek 的 ｜DSML｜ 最常见，真机上就是「乱码」）：
-    /// 书灯不执行工具，这类 markup 不能显示给读者；整段都是 markup 时要换成一句人话。
+    /// 书灯不执行工具；没有正文应报告失败，不能把错误说明当作成功回答。
     func testChatHidesToolCallMarkup() throws {
         guard let baseURL = ProcessInfo.processInfo.environment["SHUDENG_MOCK_LLM_URL"], !baseURL.isEmpty else {
             throw XCTSkip("未设置 SHUDENG_MOCK_LLM_URL，先启动 scripts/mock-llm-server.mjs")
@@ -87,12 +87,64 @@ final class ChatStreamingTests: XCTestCase {
                 """
             )
         )
-        XCTAssertEqual(try runtime.wait(for: promise, timeout: 60).toString(), "ok")
+        XCTAssertEqual(try runtime.wait(for: promise, timeout: 60).toString(), "error")
 
         let body = events.text(for: "chunk")
         XCTAssertFalse(body.contains("DSML"), "工具调用标记漏进正文了：\(body)")
         XCTAssertFalse(body.contains("getSurroundingContext"), "工具参数漏进正文了：\(body)")
-        XCTAssertTrue(body.contains("工具调用指令"), "整段都是标记时应当给读者一句说明：\(body)")
+        XCTAssertTrue(body.isEmpty, "失败说明不能冒充模型正文：\(body)")
+        XCTAssertEqual(events.types().last, "error")
+        XCTAssertFalse(events.types().contains("done"))
+        XCTAssertTrue(events.errorMessages().contains("工具调用指令"))
+    }
+
+    func testChatRejectsEmptyReasoningOnlyAndStructuredToolResponses() throws {
+        let deltas = [
+            #"{"content":"   "}"#,
+            #"{"content":"<think>只有推理</think>"}"#,
+            #"{"reasoning_content":"只有推理"}"#,
+            #"{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"getCurrentChapter","arguments":"{}"}}]}"#,
+        ]
+        for delta in deltas {
+            let runtime = try makeRuntime()
+            let events = EventSink()
+            runtime.host.onChatEvent = { events.append($0, $1) }
+            let promise = try XCTUnwrap(runtime.evaluate("""
+            __nativeFetchStream = (url, method, headers, body, id, head, chunk, finish) => {
+              head(200, JSON.stringify({ 'content-type': 'text/event-stream' }));
+              chunk('data: ' + JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk',
+                choices: [{ index: 0, delta: \(delta), finish_reason: null }] }) + '\\n\\n');
+              chunk('data: [DONE]\\n\\n');
+              finish(null);
+            };
+            ShudengApp.chat({ requestId: 'empty', provider: 'openai', apiKey: 'fixture',
+              model: 'fixture', baseUrl: 'https://fixture.invalid/v1', text: '你好', language: 'zh' });
+            """))
+            XCTAssertEqual(try runtime.wait(for: promise, timeout: 15).toString(), "error", delta)
+            XCTAssertTrue(events.text(for: "chunk").isEmpty, delta)
+            XCTAssertEqual(events.types().last, "error", delta)
+            XCTAssertFalse(events.types().contains("done"), delta)
+        }
+    }
+
+    func testCancelBeforeFirstTokenDoesNotInventAnAnswerOrError() throws {
+        let runtime = try makeRuntime()
+        let events = EventSink()
+        runtime.host.onChatEvent = { events.append($0, $1) }
+        let promise = try XCTUnwrap(runtime.evaluate("""
+        __nativeFetchStream = (url, method, headers, body, id, head, chunk, finish) => {
+          head(200, JSON.stringify({ 'content-type': 'text/event-stream' }));
+          chunk('data: [DONE]\\n\\n');
+          finish(null);
+        };
+        ShudengApp.abortChat('cancelled');
+        ShudengApp.chat({ requestId: 'cancelled', provider: 'openai', apiKey: 'fixture',
+          model: 'fixture', baseUrl: 'https://fixture.invalid/v1', text: '你好', language: 'zh' });
+        """))
+        _ = try runtime.wait(for: promise, timeout: 15)
+        XCTAssertTrue(events.text(for: "chunk").isEmpty)
+        XCTAssertTrue(events.errorMessages().isEmpty)
+        XCTAssertEqual(events.types().last, "done")
     }
 
     /// 以前存进历史里的工具调用标记：打开老对话时也要洗干净，不能一打开就是一片「乱码」。
@@ -166,8 +218,8 @@ final class ChatStreamingTests: XCTestCase {
                 finish(null);
               };
               const result = JSON.parse(await ShudengApp.translate({
-                provider: 'anthropic', baseUrl: 'https://anthropic.fixture',
-                apiKey: 'fixture-key', model: 'fixture-model', text: '你好', targetLang: 'en',
+                provider: 'anthropic', baseUrl: '  https://anthropic.fixture  ',
+                apiKey: 'fixture-key', model: '  fixture-model  ', text: '你好', targetLang: 'en',
               }));
               return JSON.stringify({ request, result });
             })()
@@ -180,6 +232,7 @@ final class ChatStreamingTests: XCTestCase {
         let request = try XCTUnwrap(json["request"] as? [String: Any])
         XCTAssertEqual(request["url"] as? String, "https://anthropic.fixture/v1/messages")
         let body = try XCTUnwrap(request["body"] as? [String: Any])
+        XCTAssertEqual(body["model"] as? String, "fixture-model")
         XCTAssertEqual(body["max_tokens"] as? Int, 2048)
         XCTAssertEqual(body["temperature"] as? Double, 0.3)
     }

@@ -1617,6 +1617,8 @@
             tocItem: detail.tocItem,
             pageItem: detail.pageItem,
             cfi: detail.cfi,
+            scrollResume: el.renderer?.scrolled ? JSON.stringify({ cfi: detail.cfi,
+              layout: scrollLayoutKey(), position: el.renderer.getScrollPosition(currentSectionIndex) }) : null,
           });
           if (currentSectionIndex !== previousSectionIndex) {
             refreshUserAnnotations(120);
@@ -1785,7 +1787,13 @@
           if (!restored) await el.goToFraction(0);
         } else if (msg.lastLocation) {
           try {
-            await el.init({ lastLocation: msg.lastLocation });
+            const position = matchingScrollResume(msg.scrollResume, msg.lastLocation, el.renderer);
+            if (position) {
+              await el.renderer.goTo({ index: position.index, anchor: { offset: position.offset } });
+              el.history.pushState(msg.lastLocation);
+            } else {
+              await el.init({ lastLocation: msg.lastLocation });
+            }
           } catch (err) {
             console.warn('[WebView] Failed to init with lastLocation, going to start:', err);
             await el.goToFraction(0);
@@ -1802,6 +1810,26 @@
         loading.innerHTML = '<div class="error-text">' + escapeHtml(message) + '</div>';
         postToRN('error', { message });
       }
+    }
+
+    function scrollLayoutKey() {
+      const renderer = view?.renderer;
+      return JSON.stringify([window.innerWidth, window.innerHeight, currentFontSize,
+        currentLineHeight, currentParagraphSpacing, currentFontTheme, currentUseBookFonts,
+        currentJustifyBodyText, currentCustomFontFamily, currentCustomFontFaceCSS,
+        renderer?.getAttribute('margin'), renderer?.getAttribute('gap')]);
+    }
+
+    function matchingScrollResume(raw, cfi, renderer) {
+      if (!renderer?.scrolled || !raw) return null;
+      try {
+        const resume = JSON.parse(raw);
+        if (resume.cfi !== cfi || resume.layout !== scrollLayoutKey()) return null;
+        const position = resume.position;
+        return Number.isInteger(position?.index) && position.index >= 0 &&
+          position.index < currentBook.sections.length && Number.isFinite(position.offset)
+          ? position : null;
+      } catch { return null; }
     }
 
     // ─── Search ───
@@ -3184,10 +3212,15 @@ html, body {
 
     // 收起正文里的选中（分页渲染时选区在 iframe 里，主文档也要一起收）。
     function clearDocumentSelection() {
-      const docs = [document];
+      // Foliate's chapter iframes live inside a closed shadow root, so querying
+      // the outer document cannot reach the active text selection.
+      const docs = new Set([document]);
+      for (const content of getRendererContents()) {
+        if (content && content.doc) docs.add(content.doc);
+      }
       document.querySelectorAll('iframe').forEach(function (frame) {
         const doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
-        if (doc) docs.push(doc);
+        if (doc) docs.add(doc);
       });
       for (const doc of docs) {
         try {
@@ -4710,34 +4743,51 @@ html, body {
 
     // ─── Chapter Translation Handlers ───
 
-    function handleGetChapterParagraphs() {
+    async function handleGetChapterParagraphs() {
+      var section = currentSectionIndex;
+      var requestedView = view;
       try {
-        // First try: view.renderer.getContents()
         var doc = null;
         var renderer = view && view.renderer;
-        if (renderer && renderer.getContents) {
-          var contents = renderer.getContents();
-          if (contents && contents.length && contents[0] && contents[0].doc) {
-            doc = contents[0].doc;
+        // At chapter boundaries the top pixel may belong to the previous section.
+        // Use the relocated text section and keep its identity across loading waits.
+        for (var attempt = 0; attempt < 20 && !doc; attempt++) {
+          if (view !== requestedView) {
+            postToRN('chapterParagraphs', { section: section, paragraphs: [], error: 'book changed' });
+            return;
           }
+          renderer = requestedView && requestedView.renderer;
+          if (renderer && renderer.getContents) {
+            var contents = renderer.getContents() || [];
+            var current = contents.find(function(item) {
+              return item && item.index === section && item.doc;
+            });
+            var candidateDoc = current && current.doc;
+            var bodyText = candidateDoc && candidateDoc.body
+              ? (candidateDoc.body.innerText || candidateDoc.body.textContent || '').trim()
+              : '';
+            if (candidateDoc && bodyText.length > 0) doc = candidateDoc;
+          }
+          if (!doc && (!renderer || !renderer.getContents)) {
+            var iframes = document.querySelectorAll('iframe');
+            for (var fi = 0; fi < iframes.length; fi++) {
+              try {
+                var iframeDoc = iframes[fi].contentDocument || (iframes[fi].contentWindow && iframes[fi].contentWindow.document);
+                var iframeText = iframeDoc && iframeDoc.body
+                  ? (iframeDoc.body.innerText || iframeDoc.body.textContent || '').trim()
+                  : '';
+                if (iframeDoc && iframeDoc.body && iframeText.length > 0) {
+                  doc = iframeDoc;
+                  break;
+                }
+              } catch (e) { /* cross-origin, skip */ }
+            }
+          }
+          if (!doc && attempt < 19) await new Promise(function(resolve) { setTimeout(resolve, 100); });
         }
 
-        // Fallback: scan iframes
         if (!doc) {
-          var iframes = document.querySelectorAll('iframe');
-          for (var fi = 0; fi < iframes.length; fi++) {
-            try {
-              var iframeDoc = iframes[fi].contentDocument || (iframes[fi].contentWindow && iframes[fi].contentWindow.document);
-              if (iframeDoc && iframeDoc.body && iframeDoc.body.innerText && iframeDoc.body.innerText.trim().length > 0) {
-                doc = iframeDoc;
-                break;
-              }
-            } catch (e) { /* cross-origin, skip */ }
-          }
-        }
-
-        if (!doc) {
-          postToRN('chapterParagraphs', { paragraphs: [], error: 'no document found (view=' + !!view + ', renderer=' + !!renderer + ', iframes=' + document.querySelectorAll('iframe').length + ')' });
+          postToRN('chapterParagraphs', { section: section, paragraphs: [], error: 'no document found (view=' + !!view + ', renderer=' + !!renderer + ', iframes=' + document.querySelectorAll('iframe').length + ')' });
           return;
         }
 
@@ -4753,9 +4803,9 @@ html, body {
           paragraphs.push({ id: id, text: text, tagName: el.tagName.toLowerCase() });
         }
 
-        postToRN('chapterParagraphs', { paragraphs: paragraphs });
+        postToRN('chapterParagraphs', { section: section, paragraphs: paragraphs });
       } catch (err) {
-        postToRN('chapterParagraphs', { paragraphs: [], error: String(err) });
+        postToRN('chapterParagraphs', { section: section, paragraphs: [], error: String(err) });
       }
     }
 

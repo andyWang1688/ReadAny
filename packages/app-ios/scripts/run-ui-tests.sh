@@ -5,13 +5,24 @@
 # 传真机 UDID 就在真机上跑（iPhone 必须解锁并保持连接）：
 #   bash packages/app-ios/scripts/run-ui-tests.sh [设备UDID]
 #
-# 不传 UDID 时用默认的「我的刀盾」。首次跑要用 -allowProvisioningUpdates
-# 给 ShudengUITests 生成描述文件，前提是 Xcode 已登录开发者账号。
+# 不传 UDID 时使用已启动的 iPhone 模拟器，不依赖真机连接。
+# 真机首次跑需 Xcode 已登录开发者账号以生成测试描述文件。
 # 只跑某一条用例：ONLY_TESTING=ShudengUITests/ShudengUITests/test07ChatStreamsAnswerAndSavesThread
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-DEVICE_ID="${1:-00008120-00043D1C1A13C01E}"
+DEVICE_ID="${1:-}"
+if [ -z "$DEVICE_ID" ]; then
+  DEVICE_ID="$(xcrun simctl list devices booted -j | node -e '
+    const fs = require("node:fs");
+    const devices = Object.values(JSON.parse(fs.readFileSync(0, "utf8")).devices).flat();
+    process.stdout.write(devices.find(device => device.isAvailable && device.name.startsWith("iPhone"))?.udid || "");
+  ')"
+  if [ -z "$DEVICE_ID" ]; then
+    echo "请先启动一个 iPhone 模拟器，或传入设备 UDID。" >&2
+    exit 1
+  fi
+fi
 MOCK_PID=""
 
 cleanup() {
@@ -39,6 +50,8 @@ fi
 xcodebuild test \
   -project "$REPO_ROOT/packages/app-ios/Shudeng.xcodeproj" \
   -scheme Shudeng \
+  -parallel-testing-enabled NO \
+  -collect-test-diagnostics never \
   -destination "$DESTINATION" \
   -derivedDataPath /private/tmp/shudeng-ui-test-dd \
   -allowProvisioningUpdates \

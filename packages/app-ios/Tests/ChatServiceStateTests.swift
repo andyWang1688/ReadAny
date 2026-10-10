@@ -14,6 +14,7 @@ final class RuntimeHost {
     var writes: [[String: Any]] = []
     var aborts = 0
     var requestID = ""
+    var lastPayload: [String: Any] = [:]
     var failAssistantWrites = false
     var failUserWrites = false
     var failPrefix = ""
@@ -57,7 +58,8 @@ final class RuntimeHost {
     }
 
     func startApp(_ expression: String) throws {
-        requestID = payload(expression)["requestId"] as! String
+        lastPayload = payload(expression)
+        requestID = lastPayload["requestId"] as! String
     }
 
     func evaluate(_ expression: String) -> String? {
@@ -217,7 +219,48 @@ struct HostEnvironment { static func deviceLocaleIdentifier() -> String { "zh-CN
         expect(readChat.activeThreadId == "B" && readChat.error != nil,
                "错误会话ID的响应不能替换当前对话")
 
+        let retryHost = RuntimeHost(), retryChat = ChatService()
+        retryChat.attach(to: retryHost)
+        let book = LibraryStore.Book(id: "book-A", filePath: "a.epub", title: "A", author: "作者")
+        retryChat.send("原问题", book: book, contextText: "选中的原文", settings: AISettings(),
+                       skill: AISkill(id: "explain", inputParam: "term"))
+        let originalID = retryChat.messages.first?.id
+        let originalRequest = retryHost.requestID
+        retryHost.emit("reasoning", text: "只有思考，没有答案")
+        retryHost.emit("error")
+        expect(retryChat.canRetryResponse && retryChat.messages.count == 1 && retryHost.assistantWrites.isEmpty,
+               "只有思考的失败请求不能保存为回答，必须能重试")
+        expect(retryChat.retryResponse(settings: AISettings()), "失败请求应能直接重试")
+        expect(retryChat.messages.first?.id == originalID && retryHost.writes.count == 1,
+               "重试必须复用原问题，不能重复写入用户消息")
+        expect((retryHost.lastPayload["history"] as? [[String: String]])?.isEmpty == true,
+               "重试的 history 不能再包含本次问题")
+        expect(retryHost.lastPayload["contextText"] as? String == "选中的原文"
+               && retryHost.lastPayload["skillId"] as? String == "explain"
+               && (retryHost.lastPayload["book"] as? [String: Any])?["id"] as? String == "book-A",
+               "重试必须保留原书籍、选区和技能上下文")
+        retryHost.observer?(originalRequest, #"{"type":"chunk","text":"旧请求迟到"}"#)
+        expect(retryChat.messages.last?.text == "" && !retryChat.canRetryResponse,
+               "重试期间不能重复发送，旧请求不得污染新回答")
+        retryHost.emit("error")
+        expect(retryChat.retryResponse(settings: AISettings()) && retryHost.writes.count == 1,
+               "连续失败重试不能复制用户消息")
+        retryHost.emit("chunk", text: "成功答案")
+        retryHost.emit("done")
+        expect(!retryChat.canRetryResponse && retryChat.messages.count == 2 && retryHost.assistantWrites.count == 1,
+               "重试成功后只保存一条有效答案")
+
+        let (partialHost, partialChat) = start()
+        partialHost.emit("error")
+        expect(!partialChat.canRetryResponse && partialChat.messages.last?.text == "A半截回答",
+               "已有部分答案时不能用空回答重试覆盖它")
+        retryChat.send("新问题", book: nil, contextText: nil, settings: AISettings())
+        retryHost.emit("error")
+        retryChat.startNewThread()
+        expect(!retryChat.canRetryResponse && !retryChat.retryResponse(settings: AISettings()),
+               "离开失败会话后不能误重试上一会话")
+
         guard failures == 0 else { exit(1) }
-        print("ChatService state regression tests passed (9 scenarios)")
+        print("ChatService state regression tests passed (12 scenarios)")
     }
 }

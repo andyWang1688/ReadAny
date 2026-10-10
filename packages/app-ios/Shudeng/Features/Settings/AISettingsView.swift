@@ -5,14 +5,13 @@ struct AISettingsView: View {
     @EnvironmentObject private var settings: AISettings
     @Environment(\.dismiss) private var dismiss
     @State private var revealKey = false
+    @State private var showAdvancedConnection = false
     /// sheet 里要自带导航栏 + 「完成」按钮；被 NavigationLink push 时不能再套一层。
     var inSheet = true
 
     var body: some View {
         if inSheet {
-            NavigationStack {
-                form
-            }
+            NavigationStack { form }
         } else {
             form
         }
@@ -27,67 +26,74 @@ struct AISettingsView: View {
                     }
                 }
                 .onChange(of: settings.provider) { _, newValue in
-                    if settings.baseURL.isEmpty || AISettings.Provider.allCases.contains(where: { $0.defaultBaseURL == settings.baseURL }) {
-                        settings.baseURL = newValue.defaultBaseURL
-                    }
+                    settings.applyProviderDefaults(for: newValue)
+                    showAdvancedConnection = newValue == .custom
                 }
-            } header: {
-                Text("服务商")
-            } footer: {
-                Text("书灯只在设备上直连你填的端点，不经过任何中转。")
-            }
-
-            Section("端点") {
-                TextField("Base URL", text: $settings.baseURL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                TextField("模型名，例如 deepseek-chat", text: $settings.model)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-            }
-
-            Section {
-                if revealKey {
-                    TextField("sk-…", text: $settings.apiKey)
+                LabeledContent("模型") {
+                    TextField("填写模型名称", text: $settings.model)
+                        .multilineTextAlignment(.trailing)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                } else {
-                    SecureField("sk-…", text: $settings.apiKey)
+                        .accessibilityLabel("模型名称")
+                        .accessibilityIdentifier("ai.model")
                 }
-                Toggle("显示明文", isOn: $revealKey)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("API Key")
+                    HStack(spacing: 8) {
+                        Group {
+                            if revealKey {
+                                TextField("填写 API Key", text: $settings.apiKey)
+                            } else {
+                                SecureField("填写 API Key", text: $settings.apiKey)
+                            }
+                        }
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.asciiCapable)
+                        .accessibilityLabel("API Key")
+                        .accessibilityIdentifier("ai.apiKey")
+                        Button {
+                            revealKey.toggle()
+                        } label: {
+                            Image(systemName: revealKey ? "eye.slash" : "eye")
+                                .frame(minWidth: 44, minHeight: 44)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel(revealKey ? "隐藏 API Key" : "显示 API Key")
+                    }
+                }
                 if let error = settings.apiKeyError {
                     Text(error).foregroundStyle(.red)
                         .accessibilityIdentifier("ai.keychainError")
-                    Button("重试钥匙串操作") { settings.retryKeychain() }
+                    Button("重试保存") { settings.retryKeychain() }
                         .accessibilityIdentifier("ai.retryKeychain")
                 }
-            } header: {
-                Text("API Key")
             } footer: {
-                Text(settings.apiKeyError == nil ? "Key 存在 iOS 钥匙串（Keychain），不写入 UserDefaults，也不随备份导出。" : "钥匙串操作失败，当前输入尚未确认保存。")
-            }
-
-            Section("常用端点") {
-                ForEach(AISettings.Provider.allCases) { provider in
-                    if !provider.defaultBaseURL.isEmpty {
-                        Button {
-                            settings.provider = provider
-                            settings.baseURL = provider.defaultBaseURL
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(provider.label).font(.subheadline)
-                                Text(provider.defaultBaseURL).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
+                Text(settings.apiKeyError == nil
+                    ? "设置自动保存，Key 仅存于这台设备的钥匙串。"
+                    : "Key 读取或保存失败，请重试。")
             }
 
             Section {
-                LabeledContent("状态", value: settings.apiKeyError != nil ? "钥匙串操作失败" : settings.isConfigured ? "已配置" : "未配置")
+                DisclosureGroup("高级连接设置", isExpanded: $showAdvancedConnection) {
+                    TextField("服务地址", text: $settings.baseURL, axis: .vertical)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                        .accessibilityLabel("服务地址")
+                        .accessibilityIdentifier("ai.baseURL")
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("连接地址：\(settings.baseURL.isEmpty ? "未填写" : settings.baseURL)")
+                    if let issue = settings.configurationIssue {
+                        Text(issue).foregroundStyle(.orange)
+                            .accessibilityIdentifier("ai.configurationIssue")
+                    }
+                }
             }
         }
+        .onAppear { showAdvancedConnection = settings.provider == .custom }
         .navigationTitle("AI 设置")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

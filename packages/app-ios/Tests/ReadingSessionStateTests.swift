@@ -101,6 +101,8 @@ struct LibraryStore { struct Book { let id: String } }
         var original: ReadingSession? = ReadingSession()
         original!.attach(to: restartHost)
         start(original!, "restart")
+        let scrollResume = #"{"cfi":"cfi-restart","layout":"same-layout","position":{"index":1,"offset":-46.5}}"#
+        original!.updateProgress(fraction: 0.5, cfi: "cfi-restart", chapter: "restart", page: 1, scrollResume: scrollResume)
         Thread.sleep(forTimeInterval: 1.01)
         original!.flush(using: restartHost)
         let originalID = restartHost.recordAttempts[0]
@@ -111,6 +113,7 @@ struct LibraryStore { struct Book { let id: String } }
         restartHost.failRecords = false
         let recovered = ReadingSession()
         recovered.attach(to: restartHost)
+        expect(restartHost.progresses.first?["scrollResume"] as? String == scrollResume, "process recreation must preserve the CFI-paired scroll refinement")
         expect(restartHost.records.count == 1 && restartHost.progresses.count == 1 && restartHost.records[0]["id"] as? String == originalID, "instance recreation must recover the same session UUID and progress")
         expect(recovered.persistenceError == nil, "successful recovery clears error")
         start(recovered, "active")

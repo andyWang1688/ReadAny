@@ -137,6 +137,7 @@ export class FixedLayout extends HTMLElement {
     const element = document.createElement("div");
     element.setAttribute("dir", "ltr");
     const iframe = document.createElement("iframe");
+    iframe.dataset.sectionIndex = String(index);
     element.append(iframe);
     Object.assign(iframe.style, {
       border: "0",
@@ -351,7 +352,8 @@ export class FixedLayout extends HTMLElement {
   getContents() {
     return Array.from(this.#root.querySelectorAll("iframe"), (frame) => ({
       doc: frame.contentDocument,
-      // TODO: index, overlayer
+      index: Number(frame.dataset.sectionIndex),
+      // TODO: overlayer
     }));
   }
   destroy() {

@@ -111,35 +111,34 @@ struct ReaderScreen: View {
             settings.readerTheme.background.ignoresSafeArea()
 
             if let book = reading.book {
-                // 上下工具条是浮层：正文永远占满整屏分页，显隐只做位移 + 淡出，
-                // 不参与布局就不会触发重新分页（Apple Books 的做法）。
-                FoliateWebView(
-                    rootDirectory: runtime.rootDirectory,
-                    book: book,
-                    pageMargin: settings.pageMargin,
-                    isLoading: $isLoading,
-                    controller: controller,
-                    onEvent: handle(event:)
-                )
-                .overlay(alignment: .bottom) {
-                    VStack(spacing: 8) {
-                        if tts.isSpeaking {
-                            speechBar
-                        }
-                        if let selection {
-                            selectionBar(selection)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 72)
-                }
-                .overlay(alignment: .top) {
+                // 工具条保留布局占位；显隐不改变正文尺寸，也不会遮住首末行。
+                VStack(spacing: 0) {
                     topBar(book)
                         .offset(y: showControls ? 0 : -140)
                         .opacity(showControls ? 1 : 0)
                         .allowsHitTesting(showControls)
-                }
-                .overlay(alignment: .bottom) {
+                    FoliateWebView(
+                        rootDirectory: runtime.rootDirectory,
+                        book: book,
+                        pageMargin: settings.pageMargin,
+                        initialSettingsJSON: json(settings.readerPayload),
+                        initialLocation: reading.pendingLocation ?? book.currentCfi,
+                        isLoading: $isLoading,
+                        controller: controller,
+                        onEvent: handle(event:)
+                    )
+                    .overlay(alignment: .bottom) {
+                        VStack(spacing: 8) {
+                            if tts.isSpeaking {
+                                speechBar
+                            }
+                            if let selection {
+                                selectionBar(selection)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 72)
+                    }
                     bottomBar
                         .offset(y: showControls ? 0 : 140)
                         .opacity(showControls ? 1 : 0)
@@ -167,6 +166,8 @@ struct ReaderScreen: View {
                 EmptyHint(icon: "book", title: "还没有打开的书", message: "回书库点一本开始读")
             }
         }
+        // 弹层键盘不改变底下正文的分页；各弹层独立处理输入区避让。
+        .ignoresSafeArea(.keyboard)
         .animation(.spring(response: 0.32, dampingFraction: 0.88), value: showControls)
         .onAppear { reading.beginSession() }
         .onDisappear {
@@ -272,6 +273,7 @@ struct ReaderScreen: View {
             iconButton("list.bullet", id: "reader.tocButton") { showTOC = true }
             iconButton("magnifyingglass", id: "reader.search") { showSearch = true }
             iconButton(isBookmarked ? "bookmark.fill" : "bookmark", id: "reader.bookmark") { toggleBookmark() }
+                .accessibilityValue(isBookmarked ? "已加书签" : "未加书签")
                 .disabled(reading.cfi.isEmpty)
             iconButton(tts.isSpeaking ? "stop.circle" : "speaker.wave.2", id: "reader.speech") { toggleSpeech() }
                 .accessibilityValue(tts.isSpeaking ? "speaking" : "idle")
@@ -1209,7 +1211,6 @@ struct ReaderScreen: View {
         case "loaded":
             isLoading = false
             pushTheme()
-            pushSettings()
             loadAnnotations()
             loadBookmarks(force: true)
             requestChapterText(section: -1)
@@ -1218,11 +1219,8 @@ struct ReaderScreen: View {
                 reading.pendingSnippet = nil
                 reading.pendingLocation = nil
                 controller.send(["type": "goToText", "text": snippet])
-            } else if let target = reading.pendingLocation, !target.isEmpty {
-                controller.send(["type": "goToCFI", "cfi": target])
+            } else {
                 reading.pendingLocation = nil
-            } else if let cfi = reading.book?.currentCfi, !cfi.isEmpty {
-                controller.send(["type": "goToCFI", "cfi": cfi])
             }
         case "error":
             isLoading = false
@@ -1259,7 +1257,7 @@ struct ReaderScreen: View {
             if let time = event["time"] as? [String: Any] {
                 remainingMinutes = time["total"] as? Double ?? 0
             }
-            reading.updateProgress(fraction: fraction, cfi: cfi, chapter: chapter, page: page)
+            reading.updateProgress(fraction: fraction, cfi: cfi, chapter: chapter, page: page, scrollResume: event["scrollResume"] as? String)
             requestChapterText(section: section)
             syncBookmarkPullState()
         case "chapterParagraphs":
@@ -1564,6 +1562,8 @@ struct FoliateWebView: UIViewRepresentable {
     let rootDirectory: URL
     let book: LibraryStore.Book
     var pageMargin: Double = 20
+    let initialSettingsJSON: String
+    let initialLocation: String?
     @Binding var isLoading: Bool
     let controller: ReaderController
     let onEvent: ([String: Any]) -> Void
@@ -1572,6 +1572,8 @@ struct FoliateWebView: UIViewRepresentable {
         Coordinator(
             rootDirectory: rootDirectory,
             pageMargin: pageMargin,
+            initialSettingsJSON: initialSettingsJSON,
+            initialLocation: initialLocation,
             isLoading: $isLoading,
             controller: controller,
             onEvent: onEvent
@@ -1616,7 +1618,7 @@ struct FoliateWebView: UIViewRepresentable {
 
     func updateUIView(_ webView: WKWebView, context: Context) {
         controller.webView = webView
-        context.coordinator.updatePageMargin(pageMargin)
+        context.coordinator.updateConfiguration(pageMargin: pageMargin, settingsJSON: initialSettingsJSON, location: initialLocation)
         context.coordinator.setBook(book)
     }
 
@@ -1624,6 +1626,8 @@ struct FoliateWebView: UIViewRepresentable {
         private weak var webView: WKWebView?
         private let rootDirectory: URL
         private var pageMargin: Double
+        private var initialSettingsJSON: String
+        private var initialLocation: String?
         private let isLoading: Binding<Bool>
         private let controller: ReaderController
         private let onEvent: ([String: Any]) -> Void
@@ -1638,19 +1642,25 @@ struct FoliateWebView: UIViewRepresentable {
         init(
             rootDirectory: URL,
             pageMargin: Double,
+            initialSettingsJSON: String,
+            initialLocation: String?,
             isLoading: Binding<Bool>,
             controller: ReaderController,
             onEvent: @escaping ([String: Any]) -> Void
         ) {
             self.rootDirectory = rootDirectory
             self.pageMargin = pageMargin
+            self.initialSettingsJSON = initialSettingsJSON
+            self.initialLocation = initialLocation
             self.isLoading = isLoading
             self.controller = controller
             self.onEvent = onEvent
         }
 
-        func updatePageMargin(_ margin: Double) {
-            pageMargin = margin
+        func updateConfiguration(pageMargin: Double, settingsJSON: String, location: String?) {
+            self.pageMargin = pageMargin
+            initialSettingsJSON = settingsJSON
+            initialLocation = location
         }
 
         func attach(_ webView: WKWebView) {
@@ -1669,6 +1679,9 @@ struct FoliateWebView: UIViewRepresentable {
             let url = rootDirectory.appendingPathComponent(book.filePath)
             let mimeType = book.filePath.lowercased().hasSuffix(".pdf") ? "application/pdf" : "application/epub+zip"
             let margin = pageMargin
+            let openingSettings = initialSettingsJSON
+            let resumeCFI = initialLocation ?? ""
+            let scrollResume = book.scrollResume ?? ""
             loadingBookID = book.id
 
             ioQueue.async { [weak self] in
@@ -1686,9 +1699,8 @@ struct FoliateWebView: UIViewRepresentable {
                     }
                     self.injectedBookID = book.id
                     self.textTimer?.invalidate()
-                    // PDF 是固定版式：reader.html 打开时就得知道上次读到哪一页，
-                    // 靠「加载完再发 goToCFI」会有竞态，重开容易回第一页。
-                    let resumeCFI = mimeType == "application/pdf" ? (book.currentCfi ?? "") : ""
+                    // loaded 会在首个章节加载时提前回传；设置和位置随 openBook 一起传入，
+                    // 避免初始化回到开头与宿主的续读跳转并发执行。
                     let script = """
                     window.handleCommand({
                       type: 'openBook',
@@ -1696,7 +1708,9 @@ struct FoliateWebView: UIViewRepresentable {
                       fileName: '\(Self.jsStringLiteral(book.filePath))',
                       mimeType: '\(mimeType)',
                       pageMargin: \(margin),
+                      settings: \(openingSettings),
                       lastLocation: '\(Self.jsStringLiteral(resumeCFI))',
+                      scrollResume: '\(Self.jsStringLiteral(scrollResume))',
                     });
                     """
                     self.webView?.evaluateJavaScript(script)

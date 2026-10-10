@@ -49,7 +49,7 @@ struct VectorModelView: View {
             } header: {
                 Text("端侧向量模型")
             } footer: {
-                Text("用系统自带的 Apple NLEmbedding：不下载模型、不出网，索引只存在这台设备上。")
+                Text("使用系统语言模型在本机建立索引；首次准备语言资源可能需要联网，书籍正文不会上传。")
             }
 
             Section {

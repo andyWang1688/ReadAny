@@ -266,6 +266,29 @@ struct ReportComparison: Decodable {
     let value: Double
     let delta: Double?
     let deltaLabel: String
+
+    var displayName: String {
+        switch label {
+        case "readingTime": "阅读时长"
+        case "activeDays": "阅读天数"
+        case "sessions": "阅读次数"
+        case "books": "读过的书"
+        case "avgSessionTime": "平均单次时长"
+        default: "阅读指标"
+        }
+    }
+
+    var formattedValue: String {
+        let unit: String
+        switch label {
+        case "readingTime", "avgSessionTime": unit = "分钟"
+        case "activeDays": unit = "天"
+        case "sessions": unit = "次"
+        case "books": unit = "本"
+        default: unit = ""
+        }
+        return "\(Int(value.rounded())) \(unit)".trimmingCharacters(in: .whitespaces)
+    }
 }
 
 struct ReportPayload: Decodable {
@@ -449,7 +472,8 @@ struct ReadingReportView: View {
                     Text("和上一期比")
                         .font(.subheadline)
                     Spacer(minLength: 8)
-                    Text("\(row.label) \(deltaText(row))")
+                    Text("\(row.displayName) \(deltaText(row))")
+                        .accessibilityIdentifier("report.comparison")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
@@ -602,7 +626,7 @@ struct ReadingReportView: View {
             lines.append("读得最多的书：\(books)")
         }
         if !payload.previous.isEmpty {
-            let rows = payload.previous.map { "\($0.label) \(Int($0.value))（\(deltaText($0))）" }.joined(separator: "；")
+            let rows = payload.previous.map { "\($0.displayName) \($0.formattedValue)（\(deltaText($0))）" }.joined(separator: "；")
             lines.append("与上一期对比：\(rows)")
         }
         return """
@@ -620,10 +644,11 @@ struct ReadingReportView: View {
     }
 
     private func deltaText(_ row: ReportComparison) -> String {
-        guard let delta = row.delta else { return row.deltaLabel.isEmpty ? "—" : row.deltaLabel }
+        if row.deltaLabel == "+∞" { return "上期为 0" }
+        guard let delta = row.delta else { return "—" }
         if abs(delta) < 0.5 { return "持平" }
-        let arrow = delta > 0 ? "↑" : "↓"
-        return "\(arrow)\(Int(abs(delta).rounded()))"
+        let direction = delta > 0 ? "增加" : "减少"
+        return "\(direction) \(Int(abs(delta).rounded()))%"
     }
 
     /// 同一年只写一次年份，日期区间一眼能读完。

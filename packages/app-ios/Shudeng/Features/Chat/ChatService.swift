@@ -65,6 +65,26 @@ final class ChatService: ObservableObject {
     /// 已经落库的回答 id：用户点「停止」和稍后到达的 done 都走持久化，别插两条。
     private var persistedReplyID: String?
     private var pendingUser: (threadId: String, message: Message)?
+    /// 仅保留当前问题的重试上下文，不保存密钥；重试使用最新设置和原消息 ID。
+    private struct Submission {
+        let message: Message
+        let book: LibraryStore.Book?
+        let contextText: String?
+        let skill: AISkill?
+    }
+    private var lastSubmission: Submission?
+
+    var canRetryResponse: Bool {
+        !isStreaming && !hasUnsavedReply && error != nil
+            && lastSubmission != nil && messages.last?.id == lastSubmission?.message.id
+    }
+
+    @discardableResult
+    func retryResponse(settings: AISettings) -> Bool {
+        guard canRetryResponse, let submission = lastSubmission else { return false }
+        return send(submission.message.text, book: submission.book, contextText: submission.contextText,
+                    settings: settings, skill: submission.skill, retrying: submission.message)
+    }
     private struct PendingReply: Codable, Equatable {
         let threadId: String
         let messageId: String
@@ -157,6 +177,7 @@ final class ChatService: ObservableObject {
         activeBookId = nil
         messages.removeAll()
         pendingUser = nil
+        lastSubmission = nil
         persistedReplyID = nil
         contextNote = nil
     }
@@ -180,6 +201,7 @@ final class ChatService: ObservableObject {
         }
         activeThreadId = loaded.id
         pendingUser = nil
+        lastSubmission = nil
         loadedInitialThread = true
         activeThreadTitle = thread.title
         activeBookId = thread.bookId
@@ -307,6 +329,17 @@ final class ChatService: ObservableObject {
         settings: AISettings,
         skill: AISkill? = nil
     ) -> Bool {
+        send(text, book: book, contextText: contextText, settings: settings, skill: skill, retrying: nil)
+    }
+
+    private func send(
+        _ text: String,
+        book: LibraryStore.Book?,
+        contextText: String?,
+        settings: AISettings,
+        skill: AISkill?,
+        retrying: Message?
+    ) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isStreaming, !pendingReplyBlocked, let runtime, runtime.state == .ready else { return false }
 
@@ -318,13 +351,21 @@ final class ChatService: ObservableObject {
         guard persistAssistantReply(using: runtime),
               ensureThread(book: book, firstMessage: trimmed, using: runtime),
               let threadId = activeThreadId else { return false }
-        if pendingUser?.threadId != threadId || pendingUser?.message.text != trimmed {
-            pendingUser = (threadId, Message(role: .user, text: trimmed))
+        let userMessage: Message
+        if let retrying {
+            guard messages.last?.id == retrying.id else { return false }
+            userMessage = retrying
+        } else {
+            if pendingUser?.threadId != threadId || pendingUser?.message.text != trimmed {
+                pendingUser = (threadId, Message(role: .user, text: trimmed))
+            }
+            guard let pending = pendingUser?.message,
+                  save(pending, in: threadId, using: runtime) else { return false }
+            userMessage = pending
+            pendingUser = nil
+            messages.append(userMessage)
         }
-        guard let userMessage = pendingUser?.message,
-              save(userMessage, in: threadId, using: runtime) else { return false }
-        pendingUser = nil
-        messages.append(userMessage)
+        lastSubmission = Submission(message: userMessage, book: book, contextText: contextText, skill: skill)
         messages.append(Message(role: .assistant, text: ""))
         persistedReplyID = nil
         isStreaming = true
@@ -577,6 +618,7 @@ final class ChatService: ObservableObject {
             activeThreadTitle = nil
             activeBookId = nil
             pendingUser = nil
+            lastSubmission = nil
             persistedReplyID = nil
             contextNote = nil
             messages = [Message(id: pending.messageId, role: .assistant, text: pending.text)]
@@ -747,8 +789,7 @@ final class ChatService: ObservableObject {
     /// 这一轮一个字都没回来（连不上 / 立刻停止）：别在屏幕上留一个空的「…」气泡。
     private func dropEmptyAssistant() {
         guard let last = messages.last, last.role == .assistant,
-              last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              last.reasoning.isEmpty
+              last.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else { return }
         messages.removeLast()
     }

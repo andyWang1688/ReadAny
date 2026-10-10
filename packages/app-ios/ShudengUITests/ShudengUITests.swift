@@ -228,11 +228,14 @@ final class ShudengUITests: XCTestCase {
 
         let bookmark = app.buttons["reader.bookmark"]
         XCTAssertTrue(bookmark.waitForExistence(timeout: 10), "书签按钮没出现")
+        let originalState = try XCTUnwrap(bookmark.value as? String)
+        XCTAssertTrue(["已加书签", "未加书签"].contains(originalState))
+        let toggledState = originalState == "已加书签" ? "未加书签" : "已加书签"
         bookmark.tap()
-        XCTAssertTrue(app.staticTexts["已加书签"].waitForExistence(timeout: 8), "点书签按钮没有出现「已加书签」")
-        snap("02-reader-bookmarked")
+        XCTAssertTrue(waitForValue("reader.bookmark", toggledState, timeout: 8), "点击没有切换书签状态")
+        snap("02-reader-bookmark-toggled")
         bookmark.tap()
-        XCTAssertTrue(app.staticTexts["已删除书签"].waitForExistence(timeout: 8), "再次点书签没有出现「已删除书签」")
+        XCTAssertTrue(waitForValue("reader.bookmark", originalState, timeout: 8), "再次点击没有恢复原书签状态")
 
         app.buttons["reader.close"].tap()
         XCTAssertTrue(waitForLibrary(timeout: 10), "关闭阅读器没有回到书库")
@@ -326,6 +329,143 @@ final class ShudengUITests: XCTestCase {
         snap("06-reader-chat")
         app.swipeDown()
         XCTAssertTrue(app.staticTexts["reader.progress"].waitForExistence(timeout: 10), "AI 面板没关掉")
+    }
+
+    func testMindMapInitiallyFitsAndNodesDoNotClip() throws {
+        try openBook(titled: "书灯测试样书")
+        XCTAssertTrue(waitForEnabled("reader.speech", timeout: 30))
+        app.buttons["reader.chat"].tap()
+        app.buttons["chat.skills"].tap()
+        app.buttons["chat.skill.mindmap"].tap()
+        let nodes = app.buttons.matching(identifier: "mindmap.node")
+        XCTAssertTrue(nodes.firstMatch.waitForExistence(timeout: 30))
+        let canvas = app.descendants(matching: .any).matching(identifier: "mindmap.canvas").firstMatch
+        let bounds = canvas.frame.insetBy(dx: -1, dy: -1)
+        let count = nodes.count
+        XCTAssertGreaterThan(count, 3)
+        for node in nodes.allElementsBoundByIndex {
+            XCTAssertTrue(bounds.contains(node.frame), "导图节点被屏幕裁切：\(node.label)")
+            let title = node.staticTexts.matching(NSPredicate(format: "label == %@", node.label)).firstMatch
+            if title.exists {
+                XCTAssertTrue(node.frame.insetBy(dx: -1, dy: -1).contains(title.frame), "节点文字超出背景：\(node.label)")
+            }
+        }
+        let shortTitle = app.staticTexts["相对论"]
+        XCTAssertLessThanOrEqual(shortTitle.frame.height, 18, "短标题被图标挤成竖排")
+        let root = nodes.matching(NSPredicate(format: "label == %@", "时间简史")).firstMatch
+        root.tap()
+        XCTAssertEqual(nodes.count, 1)
+        // 单节点时系统会把画布手势区域合到按钮，点击可见标题验证实际命中。
+        app.staticTexts["时间简史"].tap()
+        XCTAssertEqual(nodes.count, count)
+        snap("mindmap-fitted")
+        let originalWidth = shortTitle.frame.width
+        canvas.pinch(withScale: 1.5, velocity: 1)
+        XCTAssertGreaterThan(shortTitle.frame.width, originalWidth * 1.2)
+        let originalX = shortTitle.frame.midX
+        canvas.swipeRight()
+        XCTAssertGreaterThan(shortTitle.frame.midX, originalX + 20)
+        snap("mindmap-zoomed-panned")
+    }
+
+    func testContinuousScrollResumesSameChapterAndPosition() throws {
+        try openBook(titled: "书灯测试样书")
+        XCTAssertTrue(waitForEnabled("reader.speech", timeout: 30))
+        app.buttons["reader.settings"].tap()
+        app.sliders.firstMatch.adjust(toNormalizedSliderPosition: 0.2)
+        app.swipeUp()
+        app.buttons["连续滚动"].tap()
+        app.buttons["完成"].tap()
+        app.buttons["reader.toc"].tap()
+        app.buttons.matching(identifier: "reader.tocRow").firstMatch.tap()
+        sleep(2)
+        for _ in 0..<4 {
+            app.swipeUp()
+            sleep(2)
+            if app.buttons["reader.toc"].label.contains("第二章") { break }
+        }
+        let chapter = app.buttons["reader.toc"].label
+        XCTAssertTrue(chapter.contains("第二章"), chapter)
+        let progress = app.staticTexts["reader.percent"].label
+        let reference = app.webViews.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "文件系统提供读写")).firstMatch
+        XCTAssertTrue(reference.exists)
+        let originalY = reference.frame.minY
+        snap("scroll-before-close")
+        app.buttons["reader.close"].tap()
+        XCTAssertTrue(waitForLibrary())
+        app.terminate()
+        app.launch()
+        try openBook(titled: "书灯测试样书")
+        XCTAssertTrue(waitForEnabled("reader.speech", timeout: 30))
+        sleep(3)
+        snap("scroll-after-reopen")
+        XCTAssertTrue(reference.exists)
+        let restoredY = reference.frame.minY
+        print("Scroll resume paragraph Y: \(originalY) -> \(restoredY)")
+        XCTAssertEqual(restoredY, originalY, accuracy: 25, "续读时正文偏移超过一行")
+        XCTAssertEqual(app.buttons["reader.toc"].label, chapter, "连续滚动续读跳回了上一章")
+        func percent(_ text: String) -> Int { Int(text.filter(\.isNumber)) ?? -100 }
+        XCTAssertLessThanOrEqual(abs(percent(app.staticTexts["reader.percent"].label) - percent(progress)), 1)
+        app.buttons["reader.settings"].tap()
+        app.swipeUp()
+        app.buttons["分页"].tap()
+        app.buttons["完成"].tap()
+    }
+
+    func testReaderControlsDoNotCoverTextOrMoveIt() throws {
+        try openBook(titled: "书灯测试样书")
+        XCTAssertTrue(waitForEnabled("reader.speech", timeout: 30))
+        try goToFirstChapter()
+        let reader = app.webViews.firstMatch
+        let originalFrame = reader.frame
+        let progress = footerProgress()
+        snap("controls-visible-content-bounds")
+        XCTAssertGreaterThanOrEqual(originalFrame.minY, app.buttons["reader.close"].frame.maxY, "顶部工具栏盖住正文")
+        XCTAssertLessThanOrEqual(originalFrame.maxY, app.staticTexts["reader.percent"].frame.minY, "底部进度栏盖住正文")
+        tapBodyToSetToolbar(hidden: true)
+        XCTAssertTrue(waitForHittable("reader.progress", false, timeout: 6))
+        XCTAssertEqual(reader.frame, originalFrame, "隐藏工具栏改变了正文版式")
+        tapBodyToSetToolbar(hidden: false)
+        XCTAssertTrue(waitForHittable("reader.progress", true, timeout: 6))
+        XCTAssertEqual(reader.frame, originalFrame)
+        XCTAssertEqual(footerProgress(), progress)
+        snap("controls-restored-content-bounds")
+    }
+
+    func testReaderKeyboardPreservesPageAndContext() throws {
+        try openBook(titled: "书灯测试样书")
+        XCTAssertTrue(app.buttons["reader.toc"].waitForExistence(timeout: 30))
+        app.buttons["reader.toc"].tap()
+        let chapter = app.buttons.matching(identifier: "reader.tocRow")
+            .matching(NSPredicate(format: "label == %@", "第三章 投资与阅读")).firstMatch
+        XCTAssertTrue(chapter.waitForExistence(timeout: 10))
+        chapter.tap()
+        XCTAssertTrue(app.navigationBars["目录"].waitForNonExistence(timeout: 10))
+        XCTAssertTrue(waitForEnabled("reader.speech", timeout: 15))
+        let reader = app.webViews.firstMatch
+        let readerFrame = reader.frame
+        let progress = footerProgress()
+        app.buttons["reader.chat"].tap()
+        let preview = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "当前位置：")).firstMatch
+        XCTAssertTrue(preview.waitForExistence(timeout: 10))
+        let context = preview.label
+        XCTAssertTrue(context.contains("当前页正文"))
+        let input = app.textFields["chat.input"]
+        for _ in 0..<2 {
+            input.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            input.typeText("键盘检查")
+            XCTAssertEqual(reader.frame.height, readerFrame.height, accuracy: 1, "聊天键盘改变了正文布局")
+            XCTAssertEqual(preview.label, context, "键盘改变了 AI 阅读上下文")
+            XCTAssertTrue(app.buttons["chat.send"].isHittable)
+            XCTAssertLessThanOrEqual(input.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
+            app.buttons["chat.dismissKeyboard"].tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+            XCTAssertEqual(preview.label, context)
+        }
+        app.buttons["reader.chat.close"].tap()
+        XCTAssertTrue(input.waitForNonExistence(timeout: 10))
+        XCTAssertEqual(footerProgress(), progress)
     }
 
     func testReaderChatReplyCanBeClosed() throws {
@@ -738,8 +878,11 @@ final class ShudengUITests: XCTestCase {
         XCTAssertTrue(waitForNotes(timeout: 20), "重启后笔记页没加载")
         searchNotes(containing: note)
         XCTAssertTrue(app.staticTexts[editedNote].firstMatch.waitForExistence(timeout: 20), "重启后修改的笔记没有保存")
-        app.staticTexts[editedNote].firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["reader.progress"].waitForExistence(timeout: 40), "点笔记没有跳回阅读器")
+        let savedRow = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", editedNote)).firstMatch
+        XCTAssertTrue(savedRow.waitForExistence(timeout: 10))
+        // 短文字右侧留白也属于这一条笔记，不能只有文字可点。
+        savedRow.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["reader.progress"].waitForExistence(timeout: 10), "点笔记留白没有跳回阅读器")
         snap("10-jump-back")
     }
 
@@ -1109,6 +1252,68 @@ final class ShudengUITests: XCTestCase {
         let descending = app.buttons["名称 Z → A"]
         XCTAssertTrue(descending.waitForExistence(timeout: 6), "排序菜单没出来")
         descending.tap()
+    }
+
+    func testShortHighlightEntireRowOpensReader() throws {
+        try openBook(titled: "书灯测试样书")
+        XCTAssertTrue(app.buttons["reader.toc"].waitForExistence(timeout: 30))
+        app.buttons["reader.toc"].tap()
+        app.buttons.matching(identifier: "reader.tocRow")
+            .matching(NSPredicate(format: "label == %@", "第二章 宿主桥接")).firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["目录"].waitForNonExistence(timeout: 10))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42)).press(forDuration: 1.2)
+        let selection = app.descendants(matching: .any).matching(identifier: "reader.selectionBar").firstMatch
+        XCTAssertTrue(selection.waitForExistence(timeout: 10))
+        let text = selection.staticTexts.firstMatch.label
+        XCTAssertFalse(text.isEmpty)
+        XCTAssertLessThan(text.count, 12, "本回归需要短高亮，确保右侧存在留白")
+        app.buttons["reader.highlight.blue"].tap()
+        XCTAssertTrue(selection.waitForNonExistence(timeout: 10))
+        app.buttons["reader.close"].tap()
+        app.tabBars.buttons["笔记"].tap()
+        XCTAssertTrue(waitForNotes(timeout: 20))
+        app.segmentedControls.buttons["高亮"].tap()
+        let search = app.searchFields["搜索高亮、笔记或书名"]
+        search.tap()
+        search.typeText(text + "\n")
+        let row = app.buttons.matching(NSPredicate(format: "label ENDSWITH %@", ", " + text)).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 10))
+        snap("short-highlight-before-blank-tap")
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.65)).tap()
+        XCTAssertTrue(app.buttons["reader.close"].waitForExistence(timeout: 6), "点短高亮右侧留白无响应")
+        snap("short-highlight-after-blank-tap")
+    }
+
+    func testBookDeletionRequiresConfirmation() throws {
+        guard isSimulator else { throw XCTSkip("只删除模拟器内置英文样书") }
+        app.terminate()
+        app = makeApp()
+        app.launchEnvironment["SHUDENG_SEED_SAMPLE_BOOK_EN"] = "1"
+        app.launch()
+        let book = bookCover(in: app, title: "Shudeng Test Book")
+        XCTAssertTrue(book.waitForExistence(timeout: 30))
+        book.press(forDuration: 1.2)
+        app.buttons["从书库删除"].tap()
+        let confirmation = app.alerts["删除《Shudeng Test Book》？"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5), "删除书籍及关联数据前必须确认")
+        XCTAssertTrue(confirmation.staticTexts["将同时删除这本书的高亮、笔记、书签、聊天和阅读记录，无法撤销。"].exists)
+        confirmation.buttons["取消"].tap()
+        app.terminate()
+        app = makeApp() // 不重新补种英文样书，验证取消后原书仍在。
+        app.launch()
+        let retained = bookCover(in: app, title: "Shudeng Test Book")
+        XCTAssertTrue(retained.waitForExistence(timeout: 30), "取消删除后书籍丢失")
+        retained.press(forDuration: 1.2)
+        app.buttons["从书库删除"].tap()
+        let finalConfirmation = app.alerts["删除《Shudeng Test Book》？"]
+        XCTAssertTrue(finalConfirmation.waitForExistence(timeout: 5))
+        snap("book-delete-confirmation")
+        finalConfirmation.buttons["删除"].tap()
+        XCTAssertTrue(retained.waitForNonExistence(timeout: 15), "确认后书籍未删除")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(waitForLibrary())
+        XCTAssertFalse(bookCover(in: app, title: "Shudeng Test Book").exists, "删除未持久化")
     }
 
     /// 在 A 的阅读器停留过，再给 B 运行技能：发送的必须是 B，不得串入 A 的正文。
@@ -1585,6 +1790,9 @@ final class ShudengUITests: XCTestCase {
         let item = target.buttons["从书库删除"]
         guard item.waitForExistence(timeout: 8) else { return false }
         item.tap()
+        let confirmation = target.alerts["删除《\(title)》？"]
+        guard confirmation.waitForExistence(timeout: 5) else { return false }
+        confirmation.buttons["删除"].tap()
         return cell.waitForNonExistence(timeout: 20)
     }
 

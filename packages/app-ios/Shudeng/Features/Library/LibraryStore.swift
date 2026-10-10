@@ -19,6 +19,7 @@ final class LibraryStore: ObservableObject {
         let meta: Meta
         let progress: Double?
         let currentCfi: String?
+        var scrollResume: String? = nil
         let addedAt: Double?
         let lastOpenedAt: Double?
 

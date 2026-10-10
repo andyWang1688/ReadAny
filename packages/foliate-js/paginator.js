@@ -2032,6 +2032,12 @@ export class Paginator extends HTMLElement {
         if (!primaryView) return 0
         return primaryView.element.getBoundingClientRect()[this.sideProp]
     }
+    // Save section-relative pixels separately from CFI: CFI cannot represent
+    // whitespace between blocks or a partially visible line.
+    getScrollPosition(index) {
+        if (!this.scrolled || !this.#views.has(index)) return null
+        return { index, offset: this.#renderedStart - this.#getViewOffset(index) }
+    }
     get start() {
         return this.#renderedStart - this.#getViewOffset(this.#primaryIndex)
     }
@@ -2397,7 +2403,11 @@ export class Paginator extends HTMLElement {
         if (rects) {
             // when the start of the range is immediately after a hyphen in the
             // previous column, there is an extra zero width rect in that column
-            const rect = pickAnchorRect(rects, this.#getRectMapper(this.#primaryView))
+            // Scrolled content can start inside the top margin. Keep its first
+            // rect; the paginated heuristic skips negative column positions.
+            const rect = this.scrolled
+                ? Array.from(rects).find(isNonEmptyRect) ?? rects[0]
+                : pickAnchorRect(rects, this.#getRectMapper(this.#primaryView))
             if (!rect) return
             await this.#scrollToRect(rect, reason)
             // focus the element when navigating with keyboard or screen reader
@@ -2419,6 +2429,10 @@ export class Paginator extends HTMLElement {
         }
         // if anchor is a fraction
         if (this.scrolled) {
+            if (Number.isFinite(anchor?.offset)) {
+                await this.#scrollTo(this.#getViewOffset(this.#primaryIndex) + anchor.offset, reason, smooth)
+                return
+            }
             // In scrolled mode with multi-view, offset to the primary view's position
             const primaryOffset = this.#getViewOffset(this.#primaryIndex)
             const primaryView = this.#primaryView

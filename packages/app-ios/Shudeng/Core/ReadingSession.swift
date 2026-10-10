@@ -35,6 +35,7 @@ final class ReadingSession: ObservableObject {
     private var pagesRead = 0
     private var charactersRead = 0
     private var startCfi = ""
+    private var scrollResume: String?
     private var lastPageKey = ""
     /// 每页可见正文的字数：同一页重复回传时只记最大一次，避免重复累加。
     private var pageCharacters: [String: Int] = [:]
@@ -52,6 +53,7 @@ final class ReadingSession: ObservableObject {
         let bookId: String
         let progress: Double
         let cfi: String
+        let scrollResume: String?
     }
     private struct PendingFlush: Codable {
         let record: SessionRecord
@@ -144,7 +146,8 @@ final class ReadingSession: ObservableObject {
         selectionCfi = cfi
     }
 
-    func updateProgress(fraction: Double, cfi: String, chapter: String, page: Int) {
+    func updateProgress(fraction: Double, cfi: String, chapter: String, page: Int, scrollResume: String? = nil) {
+        self.scrollResume = scrollResume
         self.fraction = fraction
         if !cfi.isEmpty { self.cfi = cfi }
         if !chapter.isEmpty { chapterTitle = chapter }
@@ -202,7 +205,7 @@ final class ReadingSession: ObservableObject {
             startCfi: startCfi,
             endCfi: cfi
         )
-        let progress = cfi.isEmpty ? nil : ProgressRecord(bookId: book.id, progress: fraction, cfi: cfi)
+        let progress = cfi.isEmpty ? nil : ProgressRecord(bookId: book.id, progress: fraction, cfi: cfi, scrollResume: scrollResume)
         pendingFlushes.append(PendingFlush(record: record, progress: progress))
         sessionStartedAt = nil
         pagesRead = 0
@@ -299,6 +302,7 @@ final class ReadingSession: ObservableObject {
         chapterTitle = ""
         cfi = ""
         fraction = 0
+        scrollResume = nil
         sessionStartedAt = nil
     }
 

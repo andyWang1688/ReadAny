@@ -21,29 +21,26 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            transcript
-            if let error = chat.error {
-                errorBanner(error)
+        transcript
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if let error = chat.error {
+                    errorBanner(error)
+                }
+                composer
             }
-            composer
         }
         // AI 栏里是 push 进来的（标题＝这段对话），阅读器里是 sheet。
         .navigationTitle(chat.activeThreadTitle ?? "AI")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("收起") { inputFocused = false }
-                    .accessibilityIdentifier("chat.dismissKeyboard")
-            }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 skillMenu
                 Menu {
                     Button("清空对话", systemImage: "trash") { chat.clear() }
                         .disabled(chat.messages.isEmpty)
                         .accessibilityIdentifier("chat.clear")
-                    Button("AI 设置", systemImage: "gearshape") { showSettings = true }
+                    Button("AI 设置", systemImage: "gearshape", action: openSettings)
                         .accessibilityIdentifier("chat.settings")
                 } label: {
                     Label("更多", systemImage: "ellipsis.circle")
@@ -103,6 +100,7 @@ struct ChatSheet: View {
 
     /// 点技能：要输入对象的先挂上等用户补，其余的直接按当前阅读位置开问。
     private func run(_ skill: AISkill) {
+        guard settings.isConfigured else { openSettings(); return }
         if skill.requiresInput {
             pendingSkill = skill
             return
@@ -190,12 +188,10 @@ struct ChatSheet: View {
             if runtime.state != .ready {
                 Text("AI 内核未就绪：\(stateText)").font(.footnote).foregroundStyle(.secondary)
             } else if !settings.isConfigured {
-                Text("还没配 AI 端点").font(.headline)
-                Text("在「我的 → AI 设置」填端点、模型名和 API Key。")
+                Text("先连接你的 AI 服务").font(.headline)
+                Text("填好服务地址和模型后，就能讨论书中的内容。你写的提问会保留在这里。")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Button("去设置") { showSettings = true }
-                    .buttonStyle(.borderedProminent)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -204,6 +200,17 @@ struct ChatSheet: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
+            if let issue = settings.configurationIssue {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.circle").accessibilityHidden(true)
+                    Text(issue).font(.footnote)
+                    Spacer(minLength: 0)
+                    Button("去设置", action: openSettings)
+                        .accessibilityIdentifier("chat.configureAI")
+                }
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 4)
+            }
             if let note = chat.contextNote {
                 HStack(spacing: 6) {
                     Image(systemName: "text.magnifyingglass").font(.caption2)
@@ -243,7 +250,19 @@ struct ChatSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("chat.skillChip")
             }
-            bookChip
+            HStack {
+                bookChip
+                if inputFocused {
+                    Button { inputFocused = false } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .frame(width: 44, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("收起键盘")
+                    .accessibilityIdentifier("chat.dismissKeyboard")
+                }
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField(pendingSkill?.needsInput ?? (activeBook == nil ? "随便问点什么…" : "问这本书…"), text: $draft, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -267,6 +286,7 @@ struct ChatSheet: View {
                     .accessibilityIdentifier("chat.stop")
                 } else {
                     Button {
+                        guard settings.isConfigured else { openSettings(); return }
                         let text = draft
                         if chat.send(
                             text,
@@ -292,6 +312,11 @@ struct ChatSheet: View {
         .padding(.top, 8)
         .padding(.bottom, 10)
         .background(.bar)
+    }
+
+    private func openSettings() {
+        inputFocused = false
+        showSettings = true
     }
 
     private var canSend: Bool {
@@ -342,6 +367,12 @@ struct ChatSheet: View {
             if chat.hasUnsavedReply {
                 Button("重试保存") { chat.retryPendingReply() }
                     .accessibilityIdentifier("chat.retrySave")
+            } else if !settings.isConfigured {
+                Button("去设置", action: openSettings)
+            } else if chat.canRetryResponse {
+                Button("重试") { chat.retryResponse(settings: settings) }
+                    .accessibilityIdentifier("chat.retryResponse")
+                    .fixedSize()
             } else {
                 Button("知道了") { chat.error = nil }
             }

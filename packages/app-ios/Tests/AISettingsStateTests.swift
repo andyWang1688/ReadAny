@@ -128,6 +128,37 @@ func fixtureCopy(_ query: CFDictionary, _ result: UnsafeMutablePointer<CFTypeRef
             check(SecurityFixture.reads == 0 && SecurityFixture.updates == 0 && SecurityFixture.adds == 0 && SecurityFixture.deletes == 0, "Test session must never touch Keychain")
             check(FixtureDefaults.standard.reads == 0 && FixtureDefaults.standard.writes == 0, "Test session must never touch real defaults")
         }
+        let endpoint = AISettings(environment: ["SHUDENG_AI_BASE_URL": "not-a-url", "SHUDENG_AI_MODEL": "fixture"])
+        check(!endpoint.isConfigured, "Malformed URL must not allow sending a request")
+        check(AISettings.Provider.deepseek.defaultBaseURL == "https://api.deepseek.com", "DeepSeek must use its documented base URL")
+        check(AISettings.Provider.deepseek.defaultModel == "deepseek-flash", "DeepSeek must default to Flash")
+        endpoint.baseURL = ""
+        endpoint.model = ""
+        endpoint.applyProviderDefaults(for: .deepseek)
+        check(endpoint.baseURL == AISettings.Provider.deepseek.defaultBaseURL, "Selecting DeepSeek must fill its base URL")
+        check(endpoint.model == AISettings.Provider.deepseek.defaultModel, "Selecting DeepSeek must fill Flash model")
+        endpoint.apiKey = "fixture-key"
+        for provider in [AISettings.Provider.openai, .anthropic, .google] {
+            endpoint.model = "another-provider-model"
+            endpoint.applyProviderDefaults(for: provider)
+            check(endpoint.baseURL == provider.defaultBaseURL, "Switching provider must update its base URL")
+            check(endpoint.model == "another-provider-model", "Switching providers must retain the user's model")
+            check(endpoint.apiKey == "fixture-key", "Switching provider must preserve entered Key")
+        }
+        endpoint.baseURL = "https://custom.fixture/v1"
+        endpoint.model = "custom-model"
+        endpoint.applyProviderDefaults(for: .custom)
+        check(endpoint.baseURL == "https://custom.fixture/v1" && endpoint.model == "custom-model", "Custom selection must keep the connection available for editing")
+        for address in ["", "https://", "ftp://fixture.invalid", "https://host name.invalid", "https://fixture.invalid/\npath"] {
+            endpoint.baseURL = address
+            check(!endpoint.isConfigured, "Invalid endpoint must be blocked: \(address)")
+        }
+        for address in ["https://fixture.invalid/v1", "http://127.0.0.1:8799/v1", "  https://fixture.invalid/v1  "] {
+            endpoint.baseURL = address
+            check(endpoint.isConfigured, "Valid endpoint must remain usable")
+        }
+        endpoint.model = "\n  "
+        check(!endpoint.isConfigured, "Whitespace-only model is not configured")
         print("AI settings / Keychain: \(checks) checks passed")
     }
 }
