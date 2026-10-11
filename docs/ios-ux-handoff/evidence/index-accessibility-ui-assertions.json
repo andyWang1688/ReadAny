@@ -1,0 +1,62 @@
+{
+  "assertions": [
+    {
+      "id": "before-long-press-wrongly-opens-reader",
+      "actual": "e98|tap|button|Back||reader.close",
+      "passed": true
+    },
+    {
+      "id": "max-size-long-press-menu-fixed",
+      "actual": [
+        "e115|tap|button|开始阅读||book",
+        "e117|tap|button|建立语义索引||magnifyingglass",
+        "e119|tap|button|从书库删除||trash"
+      ],
+      "passed": true
+    },
+    {
+      "id": "model-error-explained-with-book",
+      "actual": "e47|text|text|《书灯测试样书》系统语言模型暂时无法处理这本书，请稍后重试。已保存的笔记不受影响。||library.indexError",
+      "passed": true
+    },
+    {
+      "id": "max-size-retry-enabled",
+      "actual": {
+        "predicate": "enabled",
+        "matches": [
+          "e48|tap|button|重试建立索引||library.retryIndexBuild"
+        ]
+      },
+      "passed": true
+    },
+    {
+      "id": "repeat-model-failure-remains-recoverable",
+      "actual": [
+        "e48|tap|button|重试建立索引||library.retryIndexBuild",
+        "e47|text|text|《书灯测试样书》系统语言模型暂时无法处理这本书，请稍后重试。已保存的笔记不受影响。||library.indexError"
+      ],
+      "passed": true
+    },
+    {
+      "id": "other-book-build-still-works",
+      "actual": "e55|tap|button|Shudeng Test Book，Shudeng，已读 61%，已建语义索引||library.book",
+      "passed": true
+    },
+    {
+      "id": "new-task-clears-previous-failure",
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "final-clean-default-size-library",
+      "actual": [
+        "e48|tap|button|Shudeng Test Book，Shudeng，已读 61%||library.book",
+        "e52|tap|button|ui-test-sample-pdf，未知作者，已读 33%||library.book",
+        "e44|tap|button|书灯测试样书，书灯，已读 31%||library.book",
+        "e56|tap|button|导入验收样书，书灯，已读 27%||library.book"
+      ],
+      "passed": true
+    }
+  ],
+  "passed": true
+}

@@ -1,0 +1,587 @@
+{
+  "time": "2026-10-11T07:20:53Z",
+  "scope": "合成样书阅读统计；未访问或更改 Key；无键盘输入",
+  "debugger": [
+    {
+      "step": "attach",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "\n🐛 Attach Debugger\n\n✅ Attached DAP debugger to simulator process 64326 (A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9)\n  ├ Debug session ID: 3fc28ff6-29c5-4e07-836b-32297f10cc1b\n  ├ Status: This session is now the current debug session.\n  └ Execution: Execution is running. App is responsive to UI interaction.\n\nNext steps:\n1. Add a breakpoint: debug_breakpoint_add({ debugSessionId: \"3fc28ff6-29c5-4e07-836b-32297f10cc1b\", file: \"...\", line: 123 })\n2. Continue execution: debug_continue({ debugSessionId: \"3fc28ff6-29c5-4e07-836b-32297f10cc1b\" })\n3. Show call stack: debug_stack({ debugSessionId: \"3fc28ff6-29c5-4e07-836b-32297f10cc1b\" })\n"
+          }
+        ],
+        "structuredContent": {
+          "schema": "xcodebuildmcp.output.debug-session-action",
+          "schemaVersion": "2",
+          "didError": false,
+          "error": null,
+          "data": {
+            "action": "attach",
+            "session": {
+              "debugSessionId": "3fc28ff6-29c5-4e07-836b-32297f10cc1b",
+              "connectionState": "attached",
+              "executionState": "running"
+            },
+            "artifacts": {
+              "simulatorId": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9",
+              "processId": 64326
+            }
+          },
+          "nextSteps": [
+            "Add a breakpoint: debug_breakpoint_add({ debugSessionId: \"3fc28ff6-29c5-4e07-836b-32297f10cc1b\", file: \"...\", line: 123 })",
+            "Continue execution: debug_continue({ debugSessionId: \"3fc28ff6-29c5-4e07-836b-32297f10cc1b\" })",
+            "Show call stack: debug_stack({ debugSessionId: \"3fc28ff6-29c5-4e07-836b-32297f10cc1b\" })"
+          ]
+        }
+      }
+    },
+    {
+      "step": "request-breakpoint",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "\n🐛 Add Breakpoint\n\n✅ Breakpoint 1 set\n\nOutput:\n  Set breakpoint 1 at /Users/wangxinxin/work/projects_pycharm/ReadAny/packages/app-ios/CoreBridge/Sources/ShudengCoreBridge/StreamBridge.swift:57\n"
+          }
+        ],
+        "structuredContent": {
+          "schema": "xcodebuildmcp.output.debug-breakpoint-result",
+          "schemaVersion": "2",
+          "didError": false,
+          "error": null,
+          "data": {
+            "action": "add",
+            "breakpoint": {
+              "breakpointId": 1,
+              "kind": "file-line",
+              "file": "/Users/wangxinxin/work/projects_pycharm/ReadAny/packages/app-ios/CoreBridge/Sources/ShudengCoreBridge/StreamBridge.swift",
+              "line": 57
+            }
+          }
+        }
+      }
+    }
+  ],
+  "initialSnapshot": [
+    {
+      "step": "profile",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "\n📷 Snapshot UI\n\nTargets (9) — ref|action|role|label|value|id\n  e31|tap|button|阅读统计, 今天 212 分钟||\n  e44|tap|button|外观, 跟随系统||profile.appearance\n  e57|tap|button|AI 设置, deepseek-flash||profile.ai\n  e65|tap|button|语义检索||profile.vector\n  e78|tap|button|关于书灯||profile.about\n  e94|tap|tab|书架|0|books.vertical\n  e96|tap|tab|AI|0|sparkles\n  e98|tap|tab|笔记|0|highlighter\n  e100|tap|tab|我的|1|person.crop.circle\n\nScroll (17) — ref|action|role|label|value|id\n  e2|swipe|other|||\n  e3|swipe|other|||\n  e4|swipe|other|||\n  e5|swipe|other|||\n  e6|swipe|other|||\n  e7|swipe|other|||\n  e8|swipe|other|||\n  e9|swipe|other|||\n  e10|swipe|other|||\n  e11|swipe|other|||\n  e12|swipe|other|||\n  e13|swipe|other|||\n  e16|swipe|other|||\n  e17|swipe|other|||\n  e18|swipe|other|||\n  e19|swipe|other|||\n  e20|swipe|other|||\n\nTips\n  - Use target refs with tap, type_text, long_press, and touch.\n  - Use scroll refs with swipe.\n  - Refs are snapshot-specific; after snapshot_ui or wait_for_ui, use refs from the latest output.\n  - Use wait_for_ui for text/assertions or changing UI.\n\n✅ Runtime UI snapshot captured with 121 elements, 9 likely targets, and 17 scroll areas.\n\nNext steps:\n1. Refresh after layout changes: snapshot_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\" })\n2. Wait for UI to settle: wait_for_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", predicate: \"settled\" })\n3. Batch same-screen taps: batch({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", steps: [{\"action\":\"tap\",\"elementRef\":\"e65\"},{\"action\":\"tap\",\"elementRef\":\"e78\"}] })\n4. Tap an elementRef: tap({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", elementRef: \"e31\" })\n"
+          }
+        ],
+        "structuredContent": {
+          "schema": "xcodebuildmcp.output.capture-result",
+          "schemaVersion": "2",
+          "didError": false,
+          "error": null,
+          "data": {
+            "summary": {
+              "status": "SUCCEEDED"
+            },
+            "artifacts": {
+              "simulatorId": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+            },
+            "capture": {
+              "type": "runtime-snapshot",
+              "rs": "1",
+              "screenHash": "19mpstl",
+              "seq": 77,
+              "count": 121,
+              "targets": [
+                "e31|tap|button|阅读统计, 今天 212 分钟||",
+                "e44|tap|button|外观, 跟随系统||profile.appearance",
+                "e57|tap|button|AI 设置, deepseek-flash||profile.ai",
+                "e65|tap|button|语义检索||profile.vector",
+                "e78|tap|button|关于书灯||profile.about",
+                "e94|tap|tab|书架|0|books.vertical",
+                "e96|tap|tab|AI|0|sparkles",
+                "e98|tap|tab|笔记|0|highlighter",
+                "e100|tap|tab|我的|1|person.crop.circle"
+              ],
+              "scroll": [
+                "e2|swipe|other|||",
+                "e3|swipe|other|||",
+                "e4|swipe|other|||",
+                "e5|swipe|other|||",
+                "e6|swipe|other|||",
+                "e7|swipe|other|||",
+                "e8|swipe|other|||",
+                "e9|swipe|other|||",
+                "e10|swipe|other|||",
+                "e11|swipe|other|||",
+                "e12|swipe|other|||",
+                "e13|swipe|other|||",
+                "e16|swipe|other|||",
+                "e17|swipe|other|||",
+                "e18|swipe|other|||",
+                "e19|swipe|other|||",
+                "e20|swipe|other|||"
+              ],
+              "text": [
+                "e33|text|text|阅读统计||",
+                "e34|text|text|今天 212 分钟||",
+                "e46|text|text|外观||",
+                "e47|text|text|跟随系统||",
+                "e59|text|text|AI 设置||",
+                "e60|text|text|deepseek-flash||",
+                "e67|text|text|语义检索||",
+                "e80|text|text|关于书灯||"
+              ],
+              "udid": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+            }
+          },
+          "nextSteps": [
+            "Refresh after layout changes: snapshot_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\" })",
+            "Wait for UI to settle: wait_for_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", predicate: \"settled\" })",
+            "Batch same-screen taps: batch({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", steps: [{\"action\":\"tap\",\"elementRef\":\"e65\"},{\"action\":\"tap\",\"elementRef\":\"e78\"}] })",
+            "Tap an elementRef: tap({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", elementRef: \"e31\" })"
+          ]
+        }
+      }
+    },
+    {
+      "step": "statistics",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "\n📷 Snapshot UI\n\nTargets (7) — ref|action|role|label|value|id\n  e65|tap|button|阅读报告, 周 / 月 / 全部，还能让 AI 说两句||stats.report\n  e69|tap|button|徽章, 已获得 7 / 39, 学者，已获得, 初入专注，已获得, 深度阅读，已获得, 沉浸其中，已获得||stats.badges\n  e15|tap|button|我的||BackButton\n  e101|tap|tab|书架|0|books.vertical\n  e103|tap|tab|AI|0|sparkles\n  e105|tap|tab|笔记|0|highlighter\n  e107|tap|tab|我的|1|person.crop.circle\n\nScroll (1) — ref|action|role|label|value|id\n  e21|swipe|scroll-view|||\n\nTips\n  - Use target refs with tap, type_text, long_press, and touch.\n  - Use scroll refs with swipe.\n  - Refs are snapshot-specific; after snapshot_ui or wait_for_ui, use refs from the latest output.\n  - Use wait_for_ui for text/assertions or changing UI.\n\n✅ Runtime UI snapshot captured with 128 elements, 7 likely targets, and 1 scroll area.\n\nNext steps:\n1. Refresh after layout changes: snapshot_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\" })\n2. Wait for UI to settle: wait_for_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", predicate: \"settled\" })\n3. Tap an elementRef: tap({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", elementRef: \"e65\" })\n4. Scroll visible content: swipe({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", withinElementRef: \"e21\", direction: \"up\", distance: 0.5 })\n"
+          }
+        ],
+        "structuredContent": {
+          "schema": "xcodebuildmcp.output.capture-result",
+          "schemaVersion": "2",
+          "didError": false,
+          "error": null,
+          "data": {
+            "summary": {
+              "status": "SUCCEEDED"
+            },
+            "artifacts": {
+              "simulatorId": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+            },
+            "capture": {
+              "type": "runtime-snapshot",
+              "rs": "1",
+              "screenHash": "035vsrb",
+              "seq": 80,
+              "count": 128,
+              "targets": [
+                "e65|tap|button|阅读报告, 周 / 月 / 全部，还能让 AI 说两句||stats.report",
+                "e69|tap|button|徽章, 已获得 7 / 39, 学者，已获得, 初入专注，已获得, 深度阅读，已获得, 沉浸其中，已获得||stats.badges",
+                "e15|tap|button|我的||BackButton",
+                "e101|tap|tab|书架|0|books.vertical",
+                "e103|tap|tab|AI|0|sparkles",
+                "e105|tap|tab|笔记|0|highlighter",
+                "e107|tap|tab|我的|1|person.crop.circle"
+              ],
+              "scroll": [
+                "e21|swipe|scroll-view|||"
+              ],
+              "text": [
+                "e34|text|text|今天||",
+                "e35|text|text|10 月 11 日||",
+                "e36|text|text|212||",
+                "e37|text|text|分钟||",
+                "e38|text|text|19 页||",
+                "e39|text|text|本周||",
+                "e40|text|text|累计||",
+                "e41|text|text|连续||",
+                "e42|text|text|298||",
+                "e44|text|text|5.0||",
+                "e46|text|text|5||",
+                "e43|text|text|分钟||",
+                "e45|text|text|小时||",
+                "e47|text|text|天||",
+                "e48|text|text|最近 14 天||",
+                "e49|text|text|平均 50 分钟||",
+                "e50|text|text|28||",
+                "e51|text|text|29||",
+                "e52|text|text|30||",
+                "e53|text|text|1||",
+                "e54|text|text|2||",
+                "e55|text|text|3||",
+                "e56|text|text|4||",
+                "e57|text|text|5||",
+                "e58|text|text|6||",
+                "e59|text|text|7||",
+                "e60|text|text|8||",
+                "e61|text|text|9||",
+                "e62|text|text|10||",
+                "e63|text|text|11||",
+                "e64|text|text|峰值 212 分钟 · 共 152 次阅读||",
+                "e66|text|text|阅读报告||",
+                "e67|text|text|周 / 月 / 全部，还能让 AI 说两句||",
+                "e70|text|text|徽章||",
+                "e71|text|text|已获得 7 / 39||",
+                "e77|text|text|书目排行||",
+                "e78|text|text|书灯测试样书||",
+                "e79|text|text|280 分钟||",
+                "e80|text|text|书灯||",
+                "e81|text|text|导入验收样书||",
+                "e82|text|text|17 分钟||",
+                "e83|text|text|书灯||"
+              ],
+              "udid": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+            }
+          },
+          "nextSteps": [
+            "Refresh after layout changes: snapshot_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\" })",
+            "Wait for UI to settle: wait_for_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", predicate: \"settled\" })",
+            "Tap an elementRef: tap({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", elementRef: \"e65\" })",
+            "Scroll visible content: swipe({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", withinElementRef: \"e21\", direction: \"up\", distance: 0.5 })"
+          ]
+        }
+      }
+    },
+    {
+      "step": "report-open",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "\n📷 Snapshot UI\n\nTargets (10) — ref|action|role|label|value|id\n  e15|tap|button|阅读统计||BackButton\n  e34|tap|tab|||report.range\n  e35|tap|tab|本周|1|\n  e36|tap|tab|本月|0|\n  e37|tap|tab|全部|0|\n  e56|tap|button|重新生成||report.aiRegenerate\n  e80|tap|tab|书架|0|books.vertical\n  e82|tap|tab|AI|0|sparkles\n  e84|tap|tab|笔记|0|highlighter\n  e86|tap|tab|我的|1|person.crop.circle\n\nScroll (1) — ref|action|role|label|value|id\n  e21|swipe|scroll-view|||\n\nTips\n  - Use target refs with tap, type_text, long_press, and touch.\n  - Use scroll refs with swipe.\n  - Refs are snapshot-specific; after snapshot_ui or wait_for_ui, use refs from the latest output.\n  - Use wait_for_ui for text/assertions or changing UI.\n\n✅ Runtime UI snapshot captured with 107 elements, 10 likely targets, and 1 scroll area.\n\nNext steps:\n1. Refresh after layout changes: snapshot_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\" })\n2. Wait for UI to settle: wait_for_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", predicate: \"settled\" })\n3. Batch same-screen taps: batch({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", steps: [{\"action\":\"tap\",\"elementRef\":\"e15\"},{\"action\":\"tap\",\"elementRef\":\"e56\"}] })\n4. Tap an elementRef: tap({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", elementRef: \"e15\" })\n5. Scroll visible content: swipe({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", withinElementRef: \"e21\", direction: \"up\", distance: 0.5 })\n"
+          }
+        ],
+        "structuredContent": {
+          "schema": "xcodebuildmcp.output.capture-result",
+          "schemaVersion": "2",
+          "didError": false,
+          "error": null,
+          "data": {
+            "summary": {
+              "status": "SUCCEEDED"
+            },
+            "artifacts": {
+              "simulatorId": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+            },
+            "capture": {
+              "type": "runtime-snapshot",
+              "rs": "1",
+              "screenHash": "0yzzuao",
+              "seq": 83,
+              "count": 107,
+              "targets": [
+                "e15|tap|button|阅读统计||BackButton",
+                "e34|tap|tab|||report.range",
+                "e35|tap|tab|本周|1|",
+                "e36|tap|tab|本月|0|",
+                "e37|tap|tab|全部|0|",
+                "e56|tap|button|重新生成||report.aiRegenerate",
+                "e80|tap|tab|书架|0|books.vertical",
+                "e82|tap|tab|AI|0|sparkles",
+                "e84|tap|tab|笔记|0|highlighter",
+                "e86|tap|tab|我的|1|person.crop.circle"
+              ],
+              "scroll": [
+                "e21|swipe|scroll-view|||"
+              ],
+              "text": [
+                "e38|text|text|2026-10-05 – 10-11||",
+                "e39|text|text|本期数字||",
+                "e41|text|text|298||",
+                "e43|text|text|5||",
+                "e45|text|text|284||",
+                "e42|text|text|分钟||",
+                "e44|text|text|有阅读的天数||",
+                "e46|text|text|翻过 · 页||",
+                "e47|text|text|4||",
+                "e49|text|text|0||",
+                "e51|text|text|128||",
+                "e48|text|text|读过 · 本||",
+                "e50|text|text|读完 · 本||",
+                "e52|text|text|最长单次 · 分钟||",
+                "e53|text|text|和上一期比||",
+                "e54|text|text|阅读时长 约为上期 107 倍||report.comparison",
+                "e55|text|text|AI 解读||",
+                "e57|text|text|阅读数据已更新，解读仍基于上次记录。||report.aiStale",
+                "e58|text|text|这周坚持得不错：连续 4 天打开书，总时长比上期大幅提升，还接触了 3 本书，阅读习惯正在建立。可改进的是翻书次数多、单次太短，阅读被切得很碎，所以一本也没读完。建议明天起选一本最想读的，设 15 分钟计时，手机静音，在同一时段连续读，读完再换书。||",
+                "e59|text|text|这段时间读的书||",
+                "e60|text|text|书灯测试样书||",
+                "e61|text|text|278 分钟||",
+                "e62|text|text|导入验收样书||",
+                "e63|text|text|17 分钟||",
+                "e64|text|text|Shudeng Test Book||",
+                "e65|text|text|3 分钟||",
+                "e66|text|text|ui-test-sample-pdf||",
+                "e67|text|text|<1 分钟||"
+              ],
+              "udid": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+            }
+          },
+          "nextSteps": [
+            "Refresh after layout changes: snapshot_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\" })",
+            "Wait for UI to settle: wait_for_ui({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", predicate: \"settled\" })",
+            "Batch same-screen taps: batch({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", steps: [{\"action\":\"tap\",\"elementRef\":\"e15\"},{\"action\":\"tap\",\"elementRef\":\"e56\"}] })",
+            "Tap an elementRef: tap({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", elementRef: \"e15\" })",
+            "Scroll visible content: swipe({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", withinElementRef: \"e21\", direction: \"up\", distance: 0.5 })"
+          ]
+        }
+      }
+    }
+  ],
+  "tap": {
+    "content": [
+      {
+        "type": "text",
+        "text": "\n👆 Tap\n\n✅ Tap on elementRef e56 simulated successfully.\n\nNext steps:\n1. Scroll visible content: swipe({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", withinElementRef: \"e21\", direction: \"up\", distance: 0.5 })\n2. Tap an elementRef: tap({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", elementRef: \"e15\" })\n"
+      }
+    ],
+    "structuredContent": {
+      "schema": "xcodebuildmcp.output.ui-action-result",
+      "schemaVersion": "2",
+      "didError": false,
+      "error": null,
+      "data": {
+        "summary": {
+          "status": "SUCCEEDED"
+        },
+        "action": {
+          "type": "tap",
+          "elementRef": "e56",
+          "x": 346,
+          "y": 437
+        },
+        "artifacts": {
+          "simulatorId": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+        },
+        "capture": {
+          "type": "runtime-snapshot",
+          "rs": "1",
+          "screenHash": "0yzzuao",
+          "seq": 85,
+          "count": 107,
+          "targets": [
+            "e15|tap|button|阅读统计||BackButton",
+            "e34|tap|tab|||report.range",
+            "e35|tap|tab|本周|1|",
+            "e36|tap|tab|本月|0|",
+            "e37|tap|tab|全部|0|",
+            "e56|tap|button|重新生成||report.aiRegenerate",
+            "e80|tap|tab|书架|0|books.vertical",
+            "e82|tap|tab|AI|0|sparkles",
+            "e84|tap|tab|笔记|0|highlighter",
+            "e86|tap|tab|我的|1|person.crop.circle"
+          ],
+          "scroll": [
+            "e21|swipe|scroll-view|||"
+          ],
+          "text": [
+            "e38|text|text|2026-10-05 – 10-11||",
+            "e39|text|text|本期数字||",
+            "e41|text|text|298||",
+            "e43|text|text|5||",
+            "e45|text|text|284||",
+            "e42|text|text|分钟||",
+            "e44|text|text|有阅读的天数||",
+            "e46|text|text|翻过 · 页||",
+            "e47|text|text|4||",
+            "e49|text|text|0||",
+            "e51|text|text|128||",
+            "e48|text|text|读过 · 本||",
+            "e50|text|text|读完 · 本||",
+            "e52|text|text|最长单次 · 分钟||",
+            "e53|text|text|和上一期比||",
+            "e54|text|text|阅读时长 约为上期 107 倍||report.comparison",
+            "e55|text|text|AI 解读||",
+            "e57|text|text|阅读数据已更新，解读仍基于上次记录。||report.aiStale",
+            "e58|text|text|这周坚持得不错：连续 4 天打开书，总时长比上期大幅提升，还接触了 3 本书，阅读习惯正在建立。可改进的是翻书次数多、单次太短，阅读被切得很碎，所以一本也没读完。建议明天起选一本最想读的，设 15 分钟计时，手机静音，在同一时段连续读，读完再换书。||",
+            "e59|text|text|这段时间读的书||",
+            "e60|text|text|书灯测试样书||",
+            "e61|text|text|278 分钟||",
+            "e62|text|text|导入验收样书||",
+            "e63|text|text|17 分钟||",
+            "e64|text|text|Shudeng Test Book||",
+            "e65|text|text|3 分钟||",
+            "e66|text|text|ui-test-sample-pdf||",
+            "e67|text|text|<1 分钟||"
+          ],
+          "udid": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+        }
+      },
+      "nextSteps": [
+        "Scroll visible content: swipe({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", withinElementRef: \"e21\", direction: \"up\", distance: 0.5 })",
+        "Tap an elementRef: tap({ simulatorId: \"A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9\", elementRef: \"e15\" })"
+      ]
+    }
+  },
+  "stopped": {
+    "content": [
+      {
+        "type": "text",
+        "text": "\n🐛 LLDB Command\n\n✅ Command executed\n\nOutput:\n  Process 64326 stopped\n  * thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1\n         frame #0: 0x000000010562d48c Shudeng.debug.dylib`StreamBridge.start(request=Foundation.URLRequest @ 0x000000016b8f7100) at StreamBridge.swift:57:14\n     54  \t    @discardableResult\n     55  \t    func start(_ request: URLRequest) -> URLSessionDataTask {\n     56  \t        let task = session.dataTask(with: request)\n  -> 57  \t        task.resume()\n      \t             ^\n     58  \t        return task\n     59  \t    }\n     60\n"
+      }
+    ],
+    "structuredContent": {
+      "schema": "xcodebuildmcp.output.debug-command-result",
+      "schemaVersion": "2",
+      "didError": false,
+      "error": null,
+      "data": {
+        "command": "process status",
+        "outputLines": [
+          "Process 64326 stopped",
+          "* thread #1, queue = 'com.apple.main-thread', stop reason = breakpoint 1.1",
+          "       frame #0: 0x000000010562d48c Shudeng.debug.dylib`StreamBridge.start(request=Foundation.URLRequest @ 0x000000016b8f7100) at StreamBridge.swift:57:14",
+          "   54  \t    @discardableResult",
+          "   55  \t    func start(_ request: URLRequest) -> URLSessionDataTask {",
+          "   56  \t        let task = session.dataTask(with: request)",
+          "-> 57  \t        task.resume()",
+          "    \t             ^",
+          "   58  \t        return task",
+          "   59  \t    }",
+          "   60"
+        ]
+      }
+    }
+  },
+  "cancel": {
+    "content": [
+      {
+        "type": "text",
+        "text": "\n🐛 LLDB Command\n\n✅ Command executed\n\nOutput:\n  (Void) $R0 = {}\n"
+      }
+    ],
+    "structuredContent": {
+      "schema": "xcodebuildmcp.output.debug-command-result",
+      "schemaVersion": "2",
+      "didError": false,
+      "error": null,
+      "data": {
+        "command": "expression -- task.cancel()",
+        "outputLines": [
+          "(Void) $R0 = {}"
+        ]
+      }
+    }
+  },
+  "breakpointCleanup": {
+    "content": [
+      {
+        "type": "text",
+        "text": "\n🐛 LLDB Command\n\n✅ Command executed\n\nOutput:\n  1 breakpoints deleted; 0 breakpoint locations disabled.\n"
+      }
+    ],
+    "structuredContent": {
+      "schema": "xcodebuildmcp.output.debug-command-result",
+      "schemaVersion": "2",
+      "didError": false,
+      "error": null,
+      "data": {
+        "command": "breakpoint delete 1",
+        "outputLines": [
+          "1 breakpoints deleted; 0 breakpoint locations disabled."
+        ]
+      }
+    }
+  },
+  "detach": {
+    "content": [
+      {
+        "type": "text",
+        "text": "\n🐛 Detach\n\n✅ Detached debugger session 3fc28ff6-29c5-4e07-836b-32297f10cc1b\n"
+      }
+    ],
+    "structuredContent": {
+      "schema": "xcodebuildmcp.output.debug-session-action",
+      "schemaVersion": "2",
+      "didError": false,
+      "error": null,
+      "data": {
+        "action": "detach",
+        "session": {
+          "debugSessionId": "3fc28ff6-29c5-4e07-836b-32297f10cc1b",
+          "connectionState": "detached"
+        }
+      }
+    }
+  },
+  "finalWait": {
+    "content": [
+      {
+        "type": "text",
+        "text": "\n⚙️ Wait for UI\n\nRecovery\n  Code: WAIT_TIMEOUT\n  Message: Timed out after 10000ms waiting for UI predicate 'exists'.\n  Timeout: 10000ms\n  Hint: Selector fields match exact values. Use textContains for partial visible text, inspect the latest runtime snapshot, or adjust the wait selector.\n\n❌ Timed out after 10000ms waiting for UI predicate 'exists'.\n"
+      }
+    ],
+    "structuredContent": {
+      "schema": "xcodebuildmcp.output.capture-result",
+      "schemaVersion": "2",
+      "didError": true,
+      "error": "Timed out after 10000ms waiting for UI predicate 'exists'.",
+      "data": {
+        "summary": {
+          "status": "FAILED"
+        },
+        "artifacts": {
+          "simulatorId": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+        },
+        "capture": {
+          "type": "runtime-snapshot",
+          "rs": "1",
+          "screenHash": "135aglr",
+          "seq": 99,
+          "count": 106,
+          "targets": [
+            "e15|tap|button|阅读统计||BackButton",
+            "e34|tap|tab|||report.range",
+            "e35|tap|tab|本周|1|",
+            "e36|tap|tab|本月|0|",
+            "e37|tap|tab|全部|0|",
+            "e56|tap|button|重新生成||report.aiRegenerate",
+            "e79|tap|tab|书架|0|books.vertical",
+            "e81|tap|tab|AI|0|sparkles",
+            "e83|tap|tab|笔记|0|highlighter",
+            "e85|tap|tab|我的|1|person.crop.circle"
+          ],
+          "scroll": [
+            "e21|swipe|scroll-view|||"
+          ],
+          "text": [
+            "e38|text|text|2026-10-05 – 10-11||",
+            "e39|text|text|本期数字||",
+            "e41|text|text|298||",
+            "e43|text|text|5||",
+            "e45|text|text|284||",
+            "e42|text|text|分钟||",
+            "e44|text|text|有阅读的天数||",
+            "e46|text|text|翻过 · 页||",
+            "e47|text|text|4||",
+            "e49|text|text|0||",
+            "e51|text|text|128||",
+            "e48|text|text|读过 · 本||",
+            "e50|text|text|读完 · 本||",
+            "e52|text|text|最长单次 · 分钟||",
+            "e53|text|text|和上一期比||",
+            "e54|text|text|阅读时长 约为上期 107 倍||report.comparison",
+            "e55|text|text|AI 解读||",
+            "e57|text|text|这周连续5天阅读、总时长5小时，最长一次128分钟，专注力有亮点。但150次翻阅、平均每次仅2分钟，碎片化明显，且4本都没读完。建议下周选一本正式书，每天固定25分钟不被打扰地读，读完一章再停，减少频繁切换。||",
+            "e58|text|text|这段时间读的书||",
+            "e59|text|text|书灯测试样书||",
+            "e60|text|text|278 分钟||",
+            "e61|text|text|导入验收样书||",
+            "e62|text|text|17 分钟||",
+            "e63|text|text|Shudeng Test Book||",
+            "e64|text|text|3 分钟||",
+            "e65|text|text|ui-test-sample-pdf||",
+            "e66|text|text|<1 分钟||"
+          ],
+          "udid": "A1CD94D7-2F21-48F5-8EE1-6A558ADA77C9"
+        },
+        "uiError": {
+          "code": "WAIT_TIMEOUT",
+          "message": "Timed out after 10000ms waiting for UI predicate 'exists'.",
+          "recoveryHint": "Selector fields match exact values. Use textContains for partial visible text, inspect the latest runtime snapshot, or adjust the wait selector.",
+          "timeoutMs": 10000,
+          "candidates": []
+        }
+      }
+    },
+    "isError": true
+  },
+  "conclusion": "取消第一个实际 URLSessionDataTask 后，请求最终真实成功。report.aiError 未出现；同页失败后的 UI 重试仍未验证。",
+  "screenshot": "outputs/evidence/197-report-after-cancel-auto-retry.png"
+}
