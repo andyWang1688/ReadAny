@@ -11,6 +11,7 @@ struct RootView: View {
     /// 对话状态放在根视图：AI Tab 和阅读器里的 AI 弹层共用同一段对话，
     /// 弹层关掉再打开不会丢上下文。
     @StateObject private var chat = ChatService()
+    @StateObject private var reportAI = ReportAIStore()
     @State private var showSplash = true
     @State private var showOnboarding = false
 
@@ -28,6 +29,7 @@ struct RootView: View {
         .tint(settings.accent.color)
         .environmentObject(reading)
         .environmentObject(chat)
+        .environmentObject(reportAI)
         .preferredColorScheme(settings.appearance.colorScheme)
         .safeAreaInset(edge: .top) { readingSaveError }
         .fullScreenCover(isPresented: $reading.isReaderPresented) {

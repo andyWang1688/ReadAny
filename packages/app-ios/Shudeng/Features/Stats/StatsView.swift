@@ -69,6 +69,9 @@ final class StatsStore: ObservableObject {
 }
 
 struct StatsView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .largeTitle) private var todayNumberSize = 42
+    @ScaledMetric(relativeTo: .caption2) private var chartDayWidth = 24
     @EnvironmentObject private var runtime: RuntimeHost
     @EnvironmentObject private var reading: ReadingSession
     @StateObject private var store = StatsStore()
@@ -100,24 +103,32 @@ struct StatsView: View {
         .refreshable { store.refresh(using: runtime) }
     }
 
+    private var rowLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 10))
+    }
+
     /// 今天：一个大数字打头，底下三条小字用竖细线分开。
     /// 不再把「连续 / 最长 / 天数」拆成三张一样大的卡。
     private func todaySection(_ payload: StatsPayload) -> some View {
         Card {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .firstTextBaseline) {
+                rowLayout {
                     Text("今天").font(.subheadline.weight(.semibold))
-                    Spacer(minLength: 8)
+                    if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
                     Text(dateLabel())
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                HStack(alignment: .lastTextBaseline, spacing: 6) {
-                    Text(minutesText(payload.today.minutes))
-                        .font(.system(size: 42, weight: .semibold))
-                        .monospacedDigit()
-                    Text("分钟").font(.subheadline).foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
+                rowLayout {
+                    HStack(alignment: .lastTextBaseline, spacing: 6) {
+                        Text(minutesText(payload.today.minutes))
+                            .font(.system(size: todayNumberSize, weight: .semibold))
+                            .monospacedDigit()
+                        Text("分钟").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
                     if payload.today.pages > 0 {
                         Text("\(Int(payload.today.pages)) 页")
                             .font(.footnote)
@@ -128,11 +139,11 @@ struct StatsView: View {
 
                 Divider()
 
-                HStack(spacing: 0) {
+                rowLayout {
                     metric("本周", minutesText(payload.week.minutes), "分钟")
-                    metricDivider
+                    if !dynamicTypeSize.isAccessibilitySize { metricDivider }
                     metric("累计", hoursText(payload.overall.totalReadingTime), "小时")
-                    metricDivider
+                    if !dynamicTypeSize.isAccessibilitySize { metricDivider }
                     metric("连续", "\(Int(payload.overall.currentStreak))", "天")
                 }
             }
@@ -163,31 +174,19 @@ struct StatsView: View {
     private func trendSection(_ payload: StatsPayload) -> some View {
         Card {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .firstTextBaseline) {
+                rowLayout {
                     Text("最近 \(payload.daily.count) 天").font(.subheadline.weight(.semibold))
-                    Spacer(minLength: 8)
+                    if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
                     Text("平均 \(minutesText(payload.overall.avgDailyTime)) 分钟")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
                 let peak = max(payload.daily.map(\.totalTime).max() ?? 1, 1)
-                HStack(alignment: .bottom, spacing: 2) {
-                    ForEach(payload.daily) { point in
-                        VStack(spacing: 6) {
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(point.totalTime > 0 ? Color.primary : Color(.systemGray4).opacity(0.55))
-                                .frame(width: 10, height: barHeight(point.totalTime, peak: peak, tallest: 104))
-                            Text(dayLabel(point.date))
-                                .font(.system(size: 9))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                }
-                .frame(height: 122, alignment: .bottom)
-                .background(alignment: .bottom) {
-                    Rectangle().fill(Theme.hairline).frame(height: 0.5)
+                if dynamicTypeSize.isAccessibilitySize {
+                    ScrollView(.horizontal) { trendBars(payload, peak: peak) }
+                } else {
+                    trendBars(payload, peak: peak)
                 }
                 Text("峰值 \(minutesText(peak)) 分钟 · 共 \(Int(payload.overall.totalSessions)) 次阅读")
                     .font(.caption2)
@@ -195,6 +194,27 @@ struct StatsView: View {
             }
         }
         .padding(.horizontal)
+    }
+
+    private func trendBars(_ payload: StatsPayload, peak: Double) -> some View {
+        HStack(alignment: .bottom, spacing: 2) {
+            ForEach(payload.daily) { point in
+                VStack(spacing: 6) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(point.totalTime > 0 ? Color.primary : Color(.systemGray4).opacity(0.55))
+                        .frame(width: 10, height: barHeight(point.totalTime, peak: peak, tallest: 104))
+                    Text(dayLabel(point.date))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(width: dynamicTypeSize.isAccessibilitySize ? chartDayWidth : nil)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .frame(minHeight: 122, alignment: .bottom)
+        .background(alignment: .bottom) {
+            Rectangle().fill(Theme.hairline).frame(height: 0.5)
+        }
     }
 
     /// 0 分钟的日子只留一根贴着基线的短刻度。
@@ -231,7 +251,7 @@ struct StatsView: View {
                 Text(title).font(.subheadline).foregroundStyle(Color(.label))
                 Text(detail).font(.caption2).foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
+            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
             Image(systemName: "chevron.right")
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.tertiary)
@@ -251,9 +271,9 @@ struct StatsView: View {
                         Divider()
                     }
                     VStack(alignment: .leading, spacing: 6) {
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Text(book.title).font(.subheadline).lineLimit(1)
-                            Spacer(minLength: 8)
+                        rowLayout {
+                            Text(book.title).font(.subheadline).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
                             Text("\(minutesText(book.totalTime)) 分钟")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -271,7 +291,7 @@ struct StatsView: View {
     }
 
     private func minutesText(_ minutes: Double) -> String {
-        minutes >= 100 ? String(Int(minutes.rounded())) : String(format: "%.0f", minutes)
+        ReadingDuration.minutesValue(minutes)
     }
 
     private func hoursText(_ minutes: Double) -> String {

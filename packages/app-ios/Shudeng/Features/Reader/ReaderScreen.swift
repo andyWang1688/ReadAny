@@ -97,6 +97,7 @@ struct ReaderScreen: View {
     @State private var translationSource = ""
     @State private var translationGeneration = 0
     @State private var translatedText: String?
+    @State private var translationError: String?
     /// 朗读睡眠定时器：0 = 不限时，其余是还剩多少秒。
     @State private var sleepMinutes = 0
     @State private var sleepRemaining = 0
@@ -856,8 +857,22 @@ struct ReaderScreen: View {
                             ProgressView().controlSize(.small)
                             Text("正在翻译…").font(.footnote).foregroundStyle(.secondary)
                         }
-                    } else {
-                        MarkdownText(text: translatedText ?? "")
+                    } else if let translationError {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Label("暂时无法翻译", systemImage: "exclamationmark.circle")
+                                .font(.headline)
+                                .accessibilityIdentifier("reader.translationError")
+                            Text(translationError)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Button("重试") {
+                                if !isTranslating { requestTranslation() }
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("reader.translationRetry")
+                        }
+                    } else if let translatedText {
+                        MarkdownText(text: translatedText)
                     }
                 }
                 .padding()
@@ -872,6 +887,7 @@ struct ReaderScreen: View {
                         flash("已复制译文")
                     }
                     .disabled(translatedText?.isEmpty != false)
+                    .accessibilityIdentifier("reader.translationCopy")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { showTranslation = false }
@@ -1173,19 +1189,24 @@ struct ReaderScreen: View {
     /// 选中文本翻译：中文选段译成英文，其它语言译成中文。
     private func translate(_ selection: ReaderSelection) {
         guard aiSettings.isConfigured else {
-            flash("先在设置里配 AI 端点")
+            flash("先在「我的 → AI 设置」完成配置")
             return
         }
+        translationSource = selection.text
+        showTranslation = true
+        requestTranslation()
+    }
+
+    private func requestTranslation() {
         translationGeneration += 1
         let generation = translationGeneration
-        translationSource = selection.text
         translatedText = nil
+        translationError = nil
         isTranslating = true
-        showTranslation = true
 
         let payload: [String: Any] = [
-            "text": selection.text,
-            "targetLang": Self.containsCJK(selection.text) ? "en" : "zh",
+            "text": translationSource,
+            "targetLang": Self.containsCJK(translationSource) ? "en" : "zh",
             "provider": aiSettings.provider.rawValue,
             "baseUrl": aiSettings.baseURL,
             "apiKey": aiSettings.apiKey,
@@ -1200,15 +1221,19 @@ struct ReaderScreen: View {
             guard let data = raw.data(using: .utf8),
                   let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else {
-                translatedText = "翻译没成功，再试一次"
+                translationError = "没有收到有效译文，请重试。"
                 return
             }
             if let error = result["error"] as? String, !error.isEmpty {
-                translatedText = "翻译失败：\(error)"
+                translationError = AIServiceError.message(error)
                 return
             }
-            let text = result["translated"] as? String ?? ""
-            translatedText = text.isEmpty ? "没有拿到译文，再试一次" : text
+            let text = (result["translated"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else {
+                translationError = "没有收到有效译文，请重试。"
+                return
+            }
+            translatedText = text
         }
     }
 

@@ -281,7 +281,7 @@ struct ReportComparison: Decodable {
     var formattedValue: String {
         let unit: String
         switch label {
-        case "readingTime", "avgSessionTime": unit = "分钟"
+        case "readingTime", "avgSessionTime": return ReadingDuration.minutes(value)
         case "activeDays": unit = "天"
         case "sessions": unit = "次"
         case "books": unit = "本"
@@ -352,15 +352,17 @@ final class ReportStore: ObservableObject {
 }
 
 struct ReadingReportView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @EnvironmentObject private var aiStore: ReportAIStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .headline) private var metricSize = 19
+    @ScaledMetric(relativeTo: .caption2) private var metricLabelSize = 11
     @EnvironmentObject private var runtime: RuntimeHost
     @EnvironmentObject private var reading: ReadingSession
     @EnvironmentObject private var aiSettings: AISettings
     @StateObject private var store = ReportStore()
 
     @State private var range: ReadingReportRange = .week
-    @State private var aiText: [ReadingReportRange: String] = [:]
-    @State private var aiError: String?
-    @State private var isGenerating = false
 
     var body: some View {
         ScrollView {
@@ -380,8 +382,8 @@ struct ReadingReportView: View {
                     if payload.summary.totalReadingTime > 0 {
                         metricsCard(payload)
                         statusRows(payload)
-                        if !payload.topBooks.isEmpty { topBooksCard(payload) }
                         aiCard(payload)
+                        if !payload.topBooks.isEmpty { topBooksCard(payload) }
                     } else {
                         EmptyHint(
                             icon: "book.closed",
@@ -400,10 +402,15 @@ struct ReadingReportView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle("阅读报告")
         .navigationBarTitleDisplayMode(.inline)
-        .task { store.refresh(using: runtime, range: range) }
+        .task {
+            aiStore.load(from: runtime.rootDirectory)
+            store.refresh(using: runtime, range: range)
+        }
         .onChange(of: range) { _, newValue in
-            aiError = nil
             store.refresh(using: runtime, range: newValue)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { store.refresh(using: runtime, range: range) }
         }
         .refreshable { store.refresh(using: runtime, range: range) }
     }
@@ -421,29 +428,29 @@ struct ReadingReportView: View {
     private func metricsCard(_ payload: ReportPayload) -> some View {
         let summary = payload.summary
         let numbers: [(value: String, label: String)] = [
-            ("\(Int(summary.totalReadingTime))", "分钟"),
+            (ReadingDuration.minutesValue(summary.totalReadingTime), "分钟"),
             ("\(Int(summary.activeDays))", "有阅读的天数"),
             ("\(Int(summary.totalPagesRead))", "翻过 · 页"),
             ("\(Int(summary.booksTouched))", "读过 · 本"),
             ("\(Int(summary.completedBooks))", "读完 · 本"),
-            ("\(Int(summary.longestSessionTime))", "最长单次 · 分钟"),
+            (ReadingDuration.minutesValue(summary.longestSessionTime), "最长单次 · 分钟"),
         ]
         return VStack(alignment: .leading, spacing: 6) {
             SectionHeader("本期数字")
             LazyVGrid(
-                columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: 3),
+                columns: Array(repeating: GridItem(.flexible(), alignment: .leading), count: dynamicTypeSize.isAccessibilitySize ? 1 : 3),
                 alignment: .leading,
                 spacing: 0
             ) {
                 ForEach(Array(numbers.enumerated()), id: \.offset) { index, item in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.value)
-                            .font(.system(size: 19, weight: .semibold))
+                            .font(.system(size: metricSize, weight: .semibold))
                             .monospacedDigit()
                         Text(item.label)
-                            .font(.system(size: 11))
+                            .font(.system(size: metricLabelSize))
                             .foregroundStyle(.tertiary)
-                            .lineLimit(1)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .frame(maxWidth: .infinity, alignment: numberAlignment(index))
                     .padding(.vertical, 10)
@@ -457,27 +464,35 @@ struct ReadingReportView: View {
     }
 
     private func numberAlignment(_ index: Int) -> Alignment {
+        if dynamicTypeSize.isAccessibilitySize { return .leading }
         switch index % 3 {
-        case 1: .center
-        case 2: .trailing
-        default: .leading
+        case 1: return .center
+        case 2: return .trailing
+        default: return .leading
         }
+    }
+
+    private var rowLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 10))
     }
 
     /// 环比和 AI 入口各占一行，不做成卡片。
     private func statusRows(_ payload: ReportPayload) -> some View {
         VStack(spacing: 0) {
             if let row = payload.previous.first {
-                HStack(spacing: 10) {
+                rowLayout {
                     Text("和上一期比")
                         .font(.subheadline)
-                    Spacer(minLength: 8)
+                    if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
                     Text("\(row.displayName) \(deltaText(row))")
                         .accessibilityIdentifier("report.comparison")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 11)
                 Divider()
@@ -489,23 +504,33 @@ struct ReadingReportView: View {
     }
 
     private func aiEntryRow(_ payload: ReportPayload) -> some View {
-        HStack(spacing: 10) {
+        rowLayout {
             Text("AI 解读")
                 .font(.subheadline)
-            Spacer(minLength: 8)
-            if let text = aiText[range], !text.isEmpty {
+            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
+            if aiStore.isGenerating {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text(aiStore.isGenerating(for: payload) ? "正在生成…" : "其他区间正在生成…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("report.aiLoading")
+                }
+            } else if aiStore.persistenceError != nil {
+                Button("重试保存") { aiStore.retrySave() }
+                    .font(.footnote)
+                    .disabled(aiStore.isGenerating)
+                    .accessibilityIdentifier("report.aiSaveRetry")
+            } else if aiStore.error(for: payload) != nil {
+                Button("重试") { generate(payload) }
+                    .font(.footnote)
+                    .disabled(aiStore.isGenerating)
+                    .accessibilityIdentifier("report.aiRetry")
+            } else if let text = aiStore.text(for: payload), !text.isEmpty {
                 Button("重新生成") { generate(payload) }
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                    .disabled(isGenerating)
                     .accessibilityIdentifier("report.aiRegenerate")
-            } else if isGenerating {
-                HStack(spacing: 8) {
-                    ProgressView()
-                    Text("正在生成…")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
             } else {
                 Button {
                     generate(payload)
@@ -517,10 +542,11 @@ struct ReadingReportView: View {
                     .font(.footnote)
                 }
                 .foregroundStyle(.tint)
-                .disabled(!aiSettings.isConfigured)
+                .disabled(!aiSettings.isConfigured || aiStore.isGenerating)
                 .accessibilityIdentifier("report.ai")
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 11)
     }
@@ -531,10 +557,10 @@ struct ReadingReportView: View {
                 SectionHeader("这段时间读的书")
                 ForEach(payload.topBooks) { book in
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(book.title).font(.subheadline).lineLimit(1)
-                            Spacer(minLength: 8)
-                            Text("\(Int(book.totalTime)) 分钟")
+                        rowLayout {
+                            Text(book.title).font(.subheadline).lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
+                            Text(ReadingDuration.minutes(book.totalTime))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
@@ -551,17 +577,30 @@ struct ReadingReportView: View {
 
     private func aiCard(_ payload: ReportPayload) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            if let text = aiText[range], !text.isEmpty {
+            if let text = aiStore.text(for: payload), !text.isEmpty {
+                if aiStore.isOutdated(for: payload, source: aiPrompt(payload)) {
+                    Text("阅读数据已更新，解读仍基于上次记录。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("report.aiStale")
+                }
                 MarkdownText(text: text)
-            } else if !isGenerating, !aiSettings.isConfigured {
+            } else if !aiStore.isGenerating, !aiSettings.isConfigured {
                 Text("先在「我的 → AI 设置」里填端点和模型")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if let aiError {
+            if let aiError = aiStore.error(for: payload) {
                 Text(aiError)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("report.aiError")
+            }
+            if let error = aiStore.persistenceError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("report.aiSaveError")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -569,44 +608,7 @@ struct ReadingReportView: View {
     }
 
     private func generate(_ payload: ReportPayload) {
-        guard aiSettings.isConfigured else {
-            aiError = "先在「我的 → AI 设置」里填端点和模型"
-            return
-        }
-        isGenerating = true
-        aiError = nil
-        let current = range
-
-        let body = [
-            "system": "你是一位简洁、真诚的中文阅读教练。只输出解读正文，不要寒暄，不要复述我给的全部数字。",
-            "text": aiPrompt(payload),
-            "provider": aiSettings.provider.rawValue,
-            "apiKey": aiSettings.apiKey,
-            "baseUrl": aiSettings.baseURL,
-            "model": aiSettings.model,
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
-        let json = String(decoding: data, as: UTF8.self)
-
-        runtime.callAsync("ShudengApp.aiReport(\(json))", timeout: 120) { result in
-            isGenerating = false
-            guard let resultData = result.data(using: .utf8),
-                  let object = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any]
-            else {
-                if range == current { aiError = "解读失败：返回内容看不懂" }
-                return
-            }
-            if let error = object["error"] as? String, !error.isEmpty {
-                if range == current { aiError = "解读失败：\(error)" }
-                return
-            }
-            let text = (object["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else {
-                if range == current { aiError = "解读失败：模型没有返回内容" }
-                return
-            }
-            aiText[current] = text
-        }
+        aiStore.generate(payload, prompt: aiPrompt(payload), using: runtime, settings: aiSettings)
     }
 
     /// 只把模型真正需要的数字给它，顺手把单位写清楚，中文提示词比英文稳。
@@ -618,11 +620,11 @@ struct ReadingReportView: View {
             "有阅读的天数：\(Int(summary.activeDays)) 天",
             "总页数：\(Int(summary.totalPagesRead)) 页",
             "读过：\(Int(summary.booksTouched)) 本，读完：\(Int(summary.completedBooks)) 本",
-            "阅读次数：\(Int(summary.totalSessions)) 次，平均每次 \(Int(summary.avgSessionTime)) 分钟，最长一次 \(Int(summary.longestSessionTime)) 分钟",
+            "阅读次数：\(Int(summary.totalSessions)) 次，平均每次 \(ReadingDuration.minutes(summary.avgSessionTime))，最长一次 \(ReadingDuration.minutes(summary.longestSessionTime))",
             "最长连续阅读：\(Int(summary.longestStreak)) 天，当前连续：\(Int(summary.currentStreak)) 天",
         ]
         if !payload.topBooks.isEmpty {
-            let books = payload.topBooks.map { "\($0.title)（\(Int($0.totalTime)) 分钟）" }.joined(separator: "、")
+            let books = payload.topBooks.map { "\($0.title)（\(ReadingDuration.minutes($0.totalTime))）" }.joined(separator: "、")
             lines.append("读得最多的书：\(books)")
         }
         if !payload.previous.isEmpty {
@@ -640,13 +642,14 @@ struct ReadingReportView: View {
         if minutes >= 60 {
             return String(format: "%.1f 小时", minutes / 60)
         }
-        return "\(Int(minutes.rounded())) 分钟"
+        return ReadingDuration.minutes(minutes)
     }
 
     private func deltaText(_ row: ReportComparison) -> String {
         if row.deltaLabel == "+∞" { return "上期为 0" }
         guard let delta = row.delta else { return "—" }
         if abs(delta) < 0.5 { return "持平" }
+        if delta >= 1000 { return "约为上期 \(Int((1 + delta / 100).rounded())) 倍" }
         let direction = delta > 0 ? "增加" : "减少"
         return "\(direction) \(Int(abs(delta).rounded()))%"
     }
