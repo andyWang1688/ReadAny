@@ -5,7 +5,6 @@ struct AISettingsView: View {
     @EnvironmentObject private var settings: AISettings
     @Environment(\.dismiss) private var dismiss
     @State private var revealKey = false
-    @State private var showAdvancedConnection = false
     /// sheet 里要自带导航栏 + 「完成」按钮；被 NavigationLink push 时不能再套一层。
     var inSheet = true
 
@@ -27,7 +26,6 @@ struct AISettingsView: View {
                 }
                 .onChange(of: settings.provider) { _, newValue in
                     settings.applyProviderDefaults(for: newValue)
-                    showAdvancedConnection = newValue == .custom
                 }
                 LabeledContent("模型") {
                     TextField("填写模型名称", text: $settings.model)
@@ -37,8 +35,7 @@ struct AISettingsView: View {
                         .accessibilityLabel("模型名称")
                         .accessibilityIdentifier("ai.model")
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("API Key")
+                LabeledContent("API Key") {
                     HStack(spacing: 8) {
                         Group {
                             if revealKey {
@@ -62,6 +59,17 @@ struct AISettingsView: View {
                         .accessibilityLabel(revealKey ? "隐藏 API Key" : "显示 API Key")
                     }
                 }
+                if settings.provider == .custom {
+                    LabeledContent("服务地址") {
+                        TextField("https://", text: $settings.baseURL)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .keyboardType(.URL)
+                            .accessibilityLabel("服务地址")
+                            .accessibilityIdentifier("ai.baseURL")
+                    }
+                }
                 if let error = settings.apiKeyError {
                     Text(error).foregroundStyle(.red)
                         .accessibilityIdentifier("ai.keychainError")
@@ -69,23 +77,14 @@ struct AISettingsView: View {
                         .accessibilityIdentifier("ai.retryKeychain")
                 }
             } footer: {
-                Text(settings.apiKeyError == nil
-                    ? "设置自动保存，Key 仅存于这台设备的钥匙串。"
-                    : "Key 读取或保存失败，请重试。")
-            }
-
-            Section {
-                DisclosureGroup("高级连接设置", isExpanded: $showAdvancedConnection) {
-                    TextField("服务地址", text: $settings.baseURL, axis: .vertical)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                        .accessibilityLabel("服务地址")
-                        .accessibilityIdentifier("ai.baseURL")
-                }
-            } footer: {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("连接地址：\(settings.baseURL.isEmpty ? "未填写" : settings.baseURL)")
+                    Text(settings.apiKeyError == nil
+                        ? "设置自动保存，Key 仅存于这台设备的钥匙串。"
+                        : "Key 读取或保存失败，请重试。")
+                    if settings.provider != .custom {
+                        Text("连接地址：\(settings.baseURL.isEmpty ? "未填写" : settings.baseURL)")
+                            .foregroundStyle(.secondary)
+                    }
                     if let issue = settings.configurationIssue {
                         Text(issue).foregroundStyle(.orange)
                             .accessibilityIdentifier("ai.configurationIssue")
@@ -93,7 +92,6 @@ struct AISettingsView: View {
                 }
             }
         }
-        .onAppear { showAdvancedConnection = settings.provider == .custom }
         .navigationTitle("AI 设置")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

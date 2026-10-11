@@ -10,7 +10,7 @@ struct AboutView: View {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("书灯").font(.title.weight(.semibold))
-                    Text("一盏照书的灯，AI 照亮你读不懂的地方。")
+                    Text("一盏照书的灯，陪你读懂每一页。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -27,8 +27,6 @@ struct AboutView: View {
 
             Section("版本") {
                 LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
-                LabeledContent("内嵌阅读器", value: "foliate-js (MIT)")
-                LabeledContent("内嵌内核", value: "ReadAny core")
             }
         }
         .navigationTitle("关于书灯")

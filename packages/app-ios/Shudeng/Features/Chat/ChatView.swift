@@ -31,7 +31,7 @@ struct ChatView: View {
             }
         }
         // AI 栏里是 push 进来的（标题＝这段对话），阅读器里是 sheet。
-        .navigationTitle(chat.activeThreadTitle ?? "AI")
+        .navigationTitle(chat.activeThreadTitle ?? "对话")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {

@@ -34,7 +34,7 @@ struct OnboardingView: View {
                     LampMark(size: 96)
                     Text("书灯")
                         .font(.title.weight(.semibold))
-                    Text("一盏照书的灯。\nAI 照亮你读不懂的地方。")
+                    Text("一盏照书的灯。\n陪你读懂每一页。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -51,7 +51,7 @@ struct OnboardingView: View {
                             .background(Color.primary, in: Capsule())
                     }
                     .accessibilityIdentifier("onboarding.start")
-                    Text("继续即表示同意 GPL-3.0 开源许可")
+                    Text("继续即开始使用")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

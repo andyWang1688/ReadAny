@@ -19,10 +19,10 @@ struct RootView: View {
         TabView {
             LibraryView()
                 .tabItem { Label("书架", systemImage: "books.vertical") }
-            ChatListView()
-                .tabItem { Label("AI", systemImage: "sparkles") }
             NotesView()
                 .tabItem { Label("笔记", systemImage: "highlighter") }
+            ChatListView()
+                .tabItem { Label("对话", systemImage: "ellipsis.bubble") }
             ProfileView()
                 .tabItem { Label("我的", systemImage: "person.crop.circle") }
         }

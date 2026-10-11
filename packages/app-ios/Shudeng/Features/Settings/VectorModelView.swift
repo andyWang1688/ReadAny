@@ -25,10 +25,10 @@ struct VectorModelView: View {
             Section {
                 if let info {
                     if info.available {
-                        LabeledContent("模型", value: info.modelId ?? "端侧模型")
-                        LabeledContent("向量维度", value: "\(info.dimensions ?? 0) 维")
+                        LabeledContent("模型", value: info.modelId ?? "设备模型")
+                        LabeledContent("维度", value: "\(info.dimensions ?? 0) 维")
                     } else {
-                        Text(info.error ?? "这台设备上取不到端侧向量模型")
+                        Text(info.error ?? "这台设备上取不到索引模型")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .accessibilityIdentifier("vector.diagnostics")
@@ -47,9 +47,9 @@ struct VectorModelView: View {
                     Text("读取中…").foregroundStyle(.secondary).accessibilityIdentifier("vector.status")
                 }
             } header: {
-                Text("端侧向量模型")
+                Text("索引模型")
             } footer: {
-                Text("使用系统语言模型在本机建立索引；首次准备语言资源可能需要联网，书籍正文不会上传。")
+                Text("在设备上建立索引，书籍内容不会上传。首次准备可能需要联网。")
             }
 
             Section {
@@ -90,8 +90,8 @@ struct VectorModelView: View {
     }
 
     private func statusText(_ info: LibraryStore.EmbeddingInfo) -> String {
-        guard info.available else { return "端侧向量模型不可用" }
-        return info.latinOnly == true ? "端侧向量模型可用（只支持英文内容）" : "端侧向量模型可用"
+        guard info.available else { return "索引模型不可用" }
+        return info.latinOnly == true ? "索引模型可用（只支持英文内容）" : "索引模型可用"
     }
 
     private func remove(_ book: LibraryStore.VectorizedBook) {

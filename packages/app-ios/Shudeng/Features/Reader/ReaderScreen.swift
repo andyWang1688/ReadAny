@@ -642,7 +642,7 @@ struct ReaderScreen: View {
                             settingsRowDivider
                             settingsRow {
                                 Stepper(value: $settings.lineHeight, in: 1.2...2.4, step: 0.1) {
-                                    settingsValue("行距", String(format: "%.2f", settings.lineHeight))
+                                    settingsValue("行距", String(format: "%.1f", settings.lineHeight))
                                 }
                             }
                             settingsRowDivider

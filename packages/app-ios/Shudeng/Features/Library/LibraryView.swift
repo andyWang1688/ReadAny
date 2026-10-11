@@ -56,6 +56,7 @@ struct LibraryView: View {
                 .padding(.bottom, 28)
             }
             .scrollDismissesKeyboard(.immediately)
+            .refreshable { store.refresh(using: runtime) }
             .background(Color(.systemBackground).onTapGesture { searchFocused = false })
             .navigationTitle("书架")
             .navigationBarTitleDisplayMode(.inline)

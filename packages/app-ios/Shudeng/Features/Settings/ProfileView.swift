@@ -62,7 +62,7 @@ struct ProfileView: View {
                     NavigationLink {
                         VectorModelView()
                     } label: {
-                        Label("语义检索", systemImage: "magnifyingglass")
+                        Label("智能搜索", systemImage: "magnifyingglass")
                     }
                     .accessibilityIdentifier("profile.vector")
                 }
