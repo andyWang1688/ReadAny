@@ -417,6 +417,11 @@ final class LibraryStore: ObservableObject {
             }
             if let cover = book.coverRelativePath { coverCache.removeObject(forKey: cover as NSString) }
             refresh(using: runtime)
+            do {
+                try NoteDrafts.discard(bookId: book.id)
+            } catch {
+                self.error = "书籍已删除，草稿暂时无法清理。"
+            }
         } catch {
             self.error = String(describing: error)
         }

@@ -81,6 +81,10 @@ struct ReaderScreen: View {
     @State private var bookmarks: [BookmarkItem] = []
     @State private var pushedBookmarkState: Bool?
     @State private var noteDraft = ""
+    @FocusState private var noteFocused: Bool
+    @State private var noteOriginal = ""
+    @State private var noteDraftRestored = false
+    @State private var noteDraftError: String?
     /// 打开「写笔记」弹窗时先把选中的那一段存下来：
     /// 弹窗/键盘一起出现时 WebView 会重新排版，页面里的选中可能被系统收掉，届时再用 selection 就晚了。
     @State private var noteTarget: ReaderSelection?
@@ -212,6 +216,16 @@ struct ReaderScreen: View {
                     TextField("想法…", text: $noteDraft, axis: .vertical)
                         .lineLimit(3...12)
                         .accessibilityIdentifier("reader.noteEditor")
+                        .focused($noteFocused)
+                    if noteDraftRestored {
+                        Text("已恢复未保存的内容")
+                            .font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("note.draftRestored")
+                    }
+                    if let noteDraftError {
+                        Text(noteDraftError).font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("note.draftError")
+                    }
                     if let noteError {
                         Text(noteError).font(.footnote).foregroundStyle(.secondary)
                     }
@@ -224,7 +238,8 @@ struct ReaderScreen: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("取消") {
+                        NoteCancelButton(hasChanges: noteDraft != noteOriginal) {
+                            guard discardNoteDraft() else { return }
                             noteTarget = nil
                             editingAnnotation = nil
                             noteDraft = ""
@@ -238,6 +253,20 @@ struct ReaderScreen: View {
                 }
             }
             .presentationDetents([.medium, .large])
+            .interactiveDismissDisabled(noteDraft != noteOriginal)
+            .onAppear {
+                restoreNoteDraft(original: editingAnnotation?.note ?? "")
+                noteFocused = true
+            }
+            .onChange(of: noteDraft) { _, text in
+                guard let book = reading.book, let target = noteTarget else { return }
+                do {
+                    try NoteDrafts.preserve(bookId: book.id, cfi: target.cfi, original: noteOriginal, text: text)
+                    noteDraftError = nil
+                } catch {
+                    noteDraftError = "草稿暂时无法保留，离开前请保存笔记。"
+                }
+            }
         }
     }
 
@@ -385,8 +414,10 @@ struct ReaderScreen: View {
                 Spacer(minLength: 0)
                 Button {
                     editingAnnotation = nil
-                    if noteTarget != selection { noteDraft = "" }
-                    noteTarget = selection
+                    if noteTarget != selection {
+                        noteTarget = selection
+                        restoreNoteDraft(original: "")
+                    }
                     noteError = nil
                     showNoteEditor = true
                 } label: {
@@ -1029,15 +1060,50 @@ struct ReaderScreen: View {
         }
         editingAnnotation = item
         noteTarget = ReaderSelection(text: item.text, cfi: item.cfi)
-        noteDraft = item.note ?? ""
+        restoreNoteDraft(original: item.note ?? "")
         noteError = nil
         showNoteEditor = true
     }
 
+    private func restoreNoteDraft(original: String) {
+        noteOriginal = original
+        noteDraft = original
+        noteDraftRestored = false
+        noteDraftError = nil
+        guard let book = reading.book, let target = noteTarget else { return }
+        do {
+            if let restored = try NoteDrafts.restore(bookId: book.id, cfi: target.cfi, original: original) {
+                noteDraft = restored
+                noteDraftRestored = true
+            }
+        } catch {
+            noteDraftError = "草稿读取失败，已保存的笔记不受影响。"
+        }
+    }
+
+    private func discardNoteDraft() -> Bool {
+        guard let book = reading.book, let target = noteTarget else { return true }
+        do {
+            try NoteDrafts.discard(bookId: book.id, cfi: target.cfi)
+            noteDraftError = nil
+            noteDraftRestored = false
+            return true
+        } catch {
+            noteDraftError = "草稿暂时无法清理，请重试。"
+            return false
+        }
+    }
+
     private func deleteAnnotation() {
         guard let item = editingAnnotation, item.bookId == reading.book?.id else { return }
+        guard discardNoteDraft() else { return }
         let result = runtime.appJSONOr("ShudengApp.deleteHighlight(\(json(["id": item.id])))", fallback: "", timeout: 20)
         guard result == "ok" else {
+            do {
+                try NoteDrafts.preserve(bookId: item.bookId, cfi: item.cfi, original: noteOriginal, text: noteDraft)
+            } catch {
+                noteDraftError = "草稿暂时无法保留，离开前请保存笔记。"
+            }
             noteError = "标注没能删除，请重试。"
             return
         }
@@ -1080,8 +1146,11 @@ struct ReaderScreen: View {
                 noteError = "笔记没能保存，请检查存储空间后重试。"
                 return
             }
+            editingAnnotation = item
         }
+        noteOriginal = text
         reading.markDirty()
+        guard discardNoteDraft() else { return }
         controller.send([
             "type": "addAnnotation",
             "annotation": [

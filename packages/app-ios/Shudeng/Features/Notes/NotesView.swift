@@ -77,6 +77,11 @@ final class NotesStore: ObservableObject {
         let json = String(decoding: data, as: UTF8.self)
         guard write("ShudengApp.deleteHighlight(\(json))", using: runtime) else { return }
         highlights.removeAll { $0.id == highlight.id }
+        do {
+            try NoteDrafts.discard(bookId: highlight.bookId, cfi: highlight.cfi)
+        } catch {
+            self.error = "标注已删除，草稿暂时无法清理。"
+        }
     }
 
     func delete(bookmark: BookmarkItem, using runtime: RuntimeHost) {
@@ -112,6 +117,7 @@ final class NotesStore: ObservableObject {
 }
 
 struct NotesView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var runtime: RuntimeHost
     @EnvironmentObject private var reading: ReadingSession
     @StateObject private var store = NotesStore()
@@ -119,8 +125,12 @@ struct NotesView: View {
     @State private var mode: Mode = .highlights
     @State private var editing: HighlightItem?
     @State private var noteDraft = ""
+    @FocusState private var noteFocused: Bool
+    @State private var noteOriginal = ""
+    @State private var draftRestored = false
+    @State private var draftError: String?
     @State private var share: NotesExport?
-    @State private var exportError: String?
+    @State private var failedExportFormat: ExportFormat?
     @State private var searchText = ""
 
     enum Mode: String, CaseIterable, Identifiable {
@@ -142,6 +152,25 @@ struct NotesView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                if let format = failedExportFormat {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("导出失败")
+                            .font(.headline)
+                        Text("未能生成导出文件。原内容已保留，请稍后重试。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("notes.exportError")
+                        HStack(spacing: 16) {
+                            Button("重试") { export(format) }
+                                .accessibilityIdentifier("notes.exportRetry")
+                            Button("关闭提示") { failedExportFormat = nil }
+                                .accessibilityIdentifier("notes.exportDismissError")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                }
                 Picker("", selection: $mode) {
                     ForEach(Mode.allCases) { item in
                         Text(item.label).tag(item)
@@ -186,6 +215,8 @@ struct NotesView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .navigationTitle("笔记")
+            .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $searchText, prompt: "搜索高亮、笔记或书名")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -218,6 +249,16 @@ struct NotesView: View {
                         TextField("想法…", text: $noteDraft, axis: .vertical)
                             .lineLimit(3...12)
                             .accessibilityIdentifier("notes.editor")
+                            .focused($noteFocused)
+                        if draftRestored {
+                            Text("已恢复未保存的内容")
+                                .font(.footnote).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("note.draftRestored")
+                        }
+                        if let draftError {
+                            Text(draftError).font(.footnote).foregroundStyle(.secondary)
+                                .accessibilityIdentifier("note.draftError")
+                        }
                         if let error = store.error {
                             Text(error).font(.footnote).foregroundStyle(.secondary)
                         }
@@ -226,55 +267,90 @@ struct NotesView: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("取消") { editing = nil }
+                            NoteCancelButton(hasChanges: noteDraft != noteOriginal) {
+                                guard discardDraft(item) else { return }
+                                editing = nil
+                            }
                         }
                         ToolbarItem(placement: .confirmationAction) {
                             Button("保存") {
                                 if store.update(highlight: item, note: noteDraft, using: runtime) {
-                                    editing = nil
+                                    noteOriginal = noteDraft
                                     reading.markDirty()
+                                    guard discardDraft(item) else { return }
+                                    editing = nil
                                 }
                             }
                             .accessibilityIdentifier("notes.save")
                         }
                     }
                 }
+                .onAppear {
+                    noteOriginal = item.note ?? ""
+                    noteDraft = noteOriginal
+                    draftError = nil
+                    draftRestored = false
+                    do {
+                        if let restored = try NoteDrafts.restore(bookId: item.bookId, cfi: item.cfi, original: noteOriginal) {
+                            noteDraft = restored
+                            draftRestored = true
+                        }
+                    } catch {
+                        draftError = "草稿读取失败，已保存的笔记不受影响。"
+                    }
+                    noteFocused = true
+                }
+                .onChange(of: noteDraft) { _, text in
+                    guard editing?.id == item.id else { return }
+                    do {
+                        try NoteDrafts.preserve(bookId: item.bookId, cfi: item.cfi, original: noteOriginal, text: text)
+                        draftError = nil
+                    } catch {
+                        draftError = "草稿暂时无法保留，离开前请保存笔记。"
+                    }
+                }
                 .presentationDetents([.medium, .large])
+                .interactiveDismissDisabled(noteDraft != noteOriginal)
             }
             .sheet(item: $share) { item in
                 NavigationStack {
-                    VStack(spacing: 14) {
-                        Image(systemName: "doc.text").font(.largeTitle).foregroundStyle(.secondary)
-                        Text(item.url.lastPathComponent).font(.footnote.weight(.semibold))
-                        ShareLink(item: item.url) {
-                            Label("分享 / 存到「文件」", systemImage: "square.and.arrow.up")
-                                .frame(maxWidth: .infinity)
+                    ScrollView {
+                        VStack(spacing: 18) {
+                            Text("全部高亮、笔记和书签")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("notes.exportScope")
+                            Text(item.url.lastPathComponent)
+                                .font(.subheadline.weight(.semibold))
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("notes.exportFile")
+                            ShareLink(item: item.url) {
+                                Text("分享或保存")
+                                    .foregroundStyle(Color(.systemBackground))
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("notes.exportShare")
+                            Text("在分享面板中选择「存储到文件」，或分享给其他应用。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
                         }
-                        .buttonStyle(.borderedProminent)
-                        Text("在分享面板里选「存储到文件」就能存进 iCloud 或本机文件。")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                        Spacer(minLength: 0)
+                        .padding(20)
                     }
-                    .padding(20)
                     .navigationTitle("导出")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("完成") { share = nil }
+                                .accessibilityIdentifier("notes.exportClose")
                         }
                     }
                 }
-                .presentationDetents([.height(320)])
-            }
-            .alert("导出失败", isPresented: Binding(
-                get: { exportError != nil },
-                set: { if !$0 { exportError = nil } }
-            )) {
-                Button("知道了", role: .cancel) { exportError = nil }
-            } message: {
-                Text(exportError ?? "")
+                .presentationDetents([.medium, .large])
             }
         }
     }
@@ -320,6 +396,7 @@ struct NotesView: View {
                         .foregroundStyle(.secondary)
                     }
                     .padding(.vertical, 2)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .swipeActions(edge: .trailing) {
@@ -373,12 +450,20 @@ struct NotesView: View {
             open(item)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Circle().fill(item.colorValue).frame(width: 8, height: 8)
-                    if let chapter = item.chapterTitle, !chapter.isEmpty {
-                        Text(chapter).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                let metadataLayout = dynamicTypeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+                    : AnyLayout(HStackLayout(spacing: 6))
+                metadataLayout {
+                    HStack(spacing: 6) {
+                        Circle().fill(item.colorValue).frame(width: 8, height: 8)
+                        if let chapter = item.chapterTitle, !chapter.isEmpty {
+                            Text(chapter)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                        }
                     }
-                    Spacer(minLength: 0)
+                    if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
                     Text(dateText(item.createdAt)).font(.caption2).foregroundStyle(.secondary)
                 }
                 Text(item.text)
@@ -406,9 +491,20 @@ struct NotesView: View {
         }
         .swipeActions(edge: .leading) {
             Button("编辑") {
-                noteDraft = item.note ?? ""
                 editing = item
             }
+        }
+    }
+
+    private func discardDraft(_ item: HighlightItem) -> Bool {
+        do {
+            try NoteDrafts.discard(bookId: item.bookId, cfi: item.cfi)
+            draftError = nil
+            draftRestored = false
+            return true
+        } catch {
+            draftError = "草稿暂时无法清理，请重试。"
+            return false
         }
     }
 
@@ -465,9 +561,10 @@ struct NotesView: View {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let url = directory.appendingPathComponent("书灯笔记-\(stamp).\(format.fileExtension)")
             try content.write(to: url, atomically: true, encoding: .utf8)
+            failedExportFormat = nil
             share = NotesExport(url: url, label: "导出 \(format.label)")
         } catch {
-            exportError = String(describing: error)
+            failedExportFormat = format
         }
     }
 

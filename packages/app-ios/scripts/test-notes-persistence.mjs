@@ -20,11 +20,15 @@ const toggle = reader
 const fixture = readFileSync(join(app, "Tests/ReaderBookmarkFixture.swift"), "utf8");
 const scratch = mkdtempSync(join(tmpdir(), "shudeng-notes-persistence-"));
 try {
+  const drafts = readFileSync(join(app, "Shudeng/Core/NoteDrafts.swift"), "utf8").replace(
+    /FileManager.default.urls\(for: \.documentDirectory, in: \.userDomainMask\)\[0\]\s*\.appendingPathComponent\("unsaved-notes", isDirectory: true\)/,
+    'URL(fileURLWithPath: ' + JSON.stringify(join(scratch, "drafts")) + ')',
+  );
   const source = join(scratch, "Source.swift");
   const executable = join(scratch, "test");
   writeFileSync(
     source,
-    `${store}\n@MainActor final class ReaderProbe {\n${fixture}\n${toggle}\n}\n`,
+    `${drafts}\n${store}\n@MainActor final class ReaderProbe {\n${fixture}\n${toggle}\n}\n`,
   );
   execFileSync(
     "swiftc",

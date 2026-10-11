@@ -24,10 +24,16 @@ const open = source
   .split("                } label:")[0];
 const scratch = mkdtempSync(join(tmpdir(), "reader-note-state-"));
 process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
+const drafts = readFileSync(join(app, "Shudeng/Core/NoteDrafts.swift"), "utf8").replace(
+  /FileManager.default.urls\(for: \.documentDirectory, in: \.userDomainMask\)\[0\]\s*\.appendingPathComponent\("unsaved-notes", isDirectory: true\)/,
+  'URL(fileURLWithPath: ' + JSON.stringify(join(scratch, "drafts")) + ')',
+);
+const draftMethods = source.slice(source.indexOf("    private func restoreNoteDraft("), source.indexOf("    private func deleteAnnotation("));
 writeFileSync(
   join(scratch, "main.swift"),
   `
 import Foundation
+${drafts}
 struct ReaderSelection:Equatable { let text:String; let cfi:String }
 ${models}
 extension Color { init(hex:String) { self = .yellow } }
@@ -40,11 +46,12 @@ var reading = Reading(), settings = Settings()
 let runtime = Runtime(), controller = Controller()
 var selection:ReaderSelection? = ReaderSelection(text:"original",cfi:"cfi")
 var editingAnnotation:HighlightItem?
-var noteTarget:ReaderSelection?, noteDraft = "", showNoteEditor = false, noteError:String?
+var noteTarget:ReaderSelection?, noteDraft = "", noteOriginal = "", noteDraftRestored = false, noteDraftError:String?, showNoteEditor = false, noteError:String?
 let highlightColors = [(name:"yellow",hex:"#facc15")]
 func json(_ payload:[String:Any])->String { String(decoding:try! JSONSerialization.data(withJSONObject:payload),as:UTF8.self) }
 func flash(_ text:String) {}
 func openEditor() { guard let selection else { return }; ${open} }
+${draftMethods}
 ${method}
 }
 var failures = 0

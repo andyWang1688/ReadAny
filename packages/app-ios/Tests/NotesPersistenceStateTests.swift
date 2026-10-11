@@ -33,9 +33,12 @@ struct Reading {
         let host = RuntimeHost(), store = NotesStore()
         store.refresh(using: host); store.refreshBookmarks(using: host)
         let highlight = store.highlights[0], bookmark = store.bookmarks[0]
+        try! NoteDrafts.preserve(bookId: highlight.bookId, cfi: highlight.cfi, original: "old", text: "unsaved")
+        try! NoteDrafts.preserve(bookId: "other-book", cfi: highlight.cfi, original: "", text: "keep")
         host.failPrefix = "ShudengApp.deleteHighlight"
         store.delete(highlight: highlight, using: host)
         expect(store.highlights.count == 1 && store.error != nil, "failed highlight delete must preserve row and show error")
+        expect((try? NoteDrafts.restore(bookId: highlight.bookId, cfi: highlight.cfi, original: "old")) == "unsaved", "failed delete must retain draft")
         host.failPrefix = "ShudengApp.deleteBookmark"
         store.delete(bookmark: bookmark, using: host)
         expect(store.bookmarks.count == 1 && store.error != nil, "failed bookmark delete must preserve row and show error")
@@ -54,6 +57,8 @@ struct Reading {
         store.delete(highlight: highlight, using: host)
         store.delete(bookmark: bookmark, using: host)
         expect(store.highlights.isEmpty && store.bookmarks.isEmpty, "successful delete must remove corresponding rows")
+        expect((try? NoteDrafts.restore(bookId: highlight.bookId, cfi: highlight.cfi, original: "old")) == nil, "successful delete must clean its draft")
+        expect((try? NoteDrafts.restore(bookId: "other-book", cfi: highlight.cfi, original: "")) == "keep", "delete must preserve other book draft")
         let reader = ReaderProbe()
         reader.bookmarks = [bookmark]
         reader.runtime.failPrefix = "ShudengApp.deleteBookmark"
@@ -67,6 +72,6 @@ struct Reading {
         reader.toggleBookmark()
         expect(reader.bookmarks.isEmpty && reader.reading.dirty == 1 && reader.notices.last == "已删除书签", "reader delete retry must work")
         guard failures == 0 else { exit(1) }
-        print("Notes and reader persistence regression passed (10 checks)")
+        print("Notes and reader persistence regression passed (13 checks)")
     }
 }
