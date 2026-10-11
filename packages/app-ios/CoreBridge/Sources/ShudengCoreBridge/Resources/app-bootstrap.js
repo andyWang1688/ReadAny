@@ -842,9 +842,7 @@
           updatedAt: thread.updatedAt,
           messageCount: (thread.messages || []).length,
           lastMessage: (thread.messages || []).length
-            ? readableBody(thread.messages[thread.messages.length - 1].content)
-                .replace(/\s+/g, " ")
-                .slice(0, 60)
+            ? readableBody(thread.messages[thread.messages.length - 1].content).slice(0, 60)
             : "",
         })),
       );

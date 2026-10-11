@@ -5,6 +5,7 @@ import SwiftUI
 /// 分组键是书（书的角色等于 Codex 里的「项目」）；不指定书的「临时对话」永远钉在最下。
 /// 组按书名排，顶栏可以切正序 / 倒序，不跟着最近活动跳来跳去。
 struct ChatListView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var runtime: RuntimeHost
     @EnvironmentObject private var chat: ChatService
     @StateObject private var library = LibraryStore()
@@ -12,7 +13,6 @@ struct ChatListView: View {
     @State private var openThread: ChatThread?
     @State private var startNewConversation = false
     @State private var searchText = ""
-    @State private var showSearch = false
     /// 收起来的组（默认全展开）。
     @State private var collapsedGroups: Set<String> = []
     @State private var renaming: ChatThread?
@@ -56,24 +56,15 @@ struct ChatListView: View {
                     .background(Color.orange.opacity(0.15))
                 }
             }
+            .navigationTitle("对话")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(
                 text: $searchText,
-                isPresented: $showSearch,
                 placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "搜索对话"
             )
             .toolbar {
                 if !chat.threads.isEmpty {
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button {
-                            showSearch.toggle()
-                        } label: {
-                            Image(systemName: "magnifyingglass")
-                        }
-                        .accessibilityIdentifier("chat.search")
-                        .accessibilityLabel("搜索对话")
-                    }
                     ToolbarItem(placement: .topBarTrailing) { sortMenu }
                 }
                 ToolbarItem(placement: .topBarTrailing) { newThreadButton }
@@ -245,7 +236,7 @@ struct ChatListView: View {
             guard !keyword.isEmpty else { return true }
             let bookTitle = thread.bookId.flatMap { booksByID[$0] } ?? ""
             return thread.title.lowercased().contains(keyword)
-                || (thread.lastMessage ?? "").lowercased().contains(keyword)
+                || (thread.lastMessage ?? "").split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased().contains(keyword)
                 || bookTitle.lowercased().contains(keyword)
         }
         var result = Dictionary(grouping: source) { $0.bookId ?? "" }.map { key, threads -> ThreadGroup in
@@ -264,26 +255,40 @@ struct ChatListView: View {
     }
 
     private func row(_ thread: ChatThread) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 10))
+        return layout {
             VStack(alignment: .leading, spacing: 2) {
                 Text(thread.title)
                     .font(.subheadline)
                     .foregroundStyle(Color(.label))
-                    .lineLimit(1)
+                    .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                 if let last = thread.lastMessage, !last.isEmpty {
-                    Text(last)
+                    Text(preview(last))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
                 }
             }
-            Spacer(minLength: 8)
+            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
             Text(stamp(thread))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
+    }
+
+    private func preview(_ source: String) -> String {
+        MarkdownBlock.split(source).map { block in
+            switch block {
+            case .prose(let value):
+                return String(MarkdownBlock.attributedProse(value).characters)
+            case .code(let language, let value):
+                return language?.lowercased() == "mermaid" ? "思维导图" : value
+            }
+        }.joined(separator: " ").split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     private func stamp(_ thread: ChatThread) -> String {

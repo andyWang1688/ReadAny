@@ -3,6 +3,44 @@ import XCTest
 @testable import ShudengCoreBridge
 
 final class MarkdownBlocksTests: XCTestCase {
+    func testSummaryKeepsHeadingParagraphAndListBoundaries() {
+        let input = "## 核心主题\n\n第一段。\n\n## 主要要点\n\n1. **网络**：SSE 分片。\n2. **存储**：SQLite。"
+        let output = MarkdownBlock.attributedProse(input)
+        XCTAssertEqual(String(output.characters), "核心主题\n\n第一段。\n\n主要要点\n\n1. 网络：SSE 分片。\n2. 存储：SQLite。")
+        XCTAssertTrue(output.runs.first?.inlinePresentationIntent?.contains(.stronglyEmphasized) == true)
+    }
+
+    func testNestedListsAndContinuationKeepTheirMeaning() {
+        let output = MarkdownBlock.attributedProse("- 外层\n  - 内层\n\n    延续段落\n- 下一项")
+        XCTAssertEqual(String(output.characters), "• 外层\n  • 内层\n    延续段落\n• 下一项")
+    }
+
+    func testLinksAndInlineEmphasisSurviveLayout() {
+        let output = MarkdownBlock.attributedProse("## **标题**\n\n访问 [示例](https://example.com) 和 *斜体*、\u{0060}代码\u{0060}。")
+        XCTAssertTrue(output.runs.contains { $0.link?.absoluteString == "https://example.com" })
+        XCTAssertTrue(output.runs.contains { $0.inlinePresentationIntent?.contains(.emphasized) == true })
+        XCTAssertTrue(output.runs.contains { $0.inlinePresentationIntent?.contains(.code) == true })
+        XCTAssertFalse(String(output.characters).contains("##"))
+    }
+
+    func testQuotesAndTablesKeepSeparators() {
+        let output = MarkdownBlock.attributedProse("> 引用\n\n| 名称 | 数量 |\n| --- | --- |\n| 样书 | 2 |")
+        XCTAssertEqual(String(output.characters), "│ 引用\n\n名称  |  数量\n样书  |  2")
+    }
+
+    func testParagraphAfterListRequiresMarkdownBlankLine() {
+        let separate = MarkdownBlock.attributedProse("1. 第一点\n2. 第二点\n\n结尾。")
+        XCTAssertEqual(String(separate.characters), "1. 第一点\n2. 第二点\n\n结尾。")
+        let continuation = MarkdownBlock.attributedProse("1. 第一点\n接着这一项。")
+        XCTAssertEqual(String(continuation.characters), "1. 第一点 接着这一项。")
+    }
+
+    func testPartialMarkdownNeverDisappears() {
+        for text in ["**尚未结束", "一句话", "[链接", "中文\n下一行"] {
+            XCTAssertFalse(MarkdownBlock.attributedProse(text).characters.isEmpty)
+        }
+    }
+
     func testSplitsProseAndFencedCode() {
         let markdown = """
         先看这段：

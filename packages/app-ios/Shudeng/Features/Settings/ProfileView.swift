@@ -2,6 +2,7 @@
 import SwiftUI
 
 struct ProfileView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var runtime: RuntimeHost
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var aiSettings: AISettings
@@ -15,9 +16,9 @@ struct ProfileView: View {
                     NavigationLink {
                         StatsView()
                     } label: {
-                        HStack {
+                        rowLayout {
                             Label("阅读统计", systemImage: "chart.bar")
-                            Spacer()
+                            if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                             Text(todayText)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -33,9 +34,9 @@ struct ProfileView: View {
                     NavigationLink {
                         AppearanceSettingsView()
                     } label: {
-                        HStack {
+                        rowLayout {
                             Label("外观", systemImage: "paintpalette")
-                            Spacer()
+                            if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                             Text(settings.appearance.label)
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -48,13 +49,13 @@ struct ProfileView: View {
                     NavigationLink {
                         AISettingsView(inSheet: false)
                     } label: {
-                        HStack {
+                        rowLayout {
                             Label("AI 设置", systemImage: "sparkles")
-                            Spacer()
+                            if !dynamicTypeSize.isAccessibilitySize { Spacer() }
                             Text(aiSettings.isConfigured ? aiSettings.model : "未配置")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                         }
                     }
                     .accessibilityIdentifier("profile.ai")
@@ -75,10 +76,18 @@ struct ProfileView: View {
                         .accessibilityIdentifier("profile.about")
                 }
             }
+            .navigationTitle("我的")
+            .navigationBarTitleDisplayMode(.inline)
             .task { stats.refresh(using: runtime) }
             .onChange(of: runtime.state) { _, _ in stats.refresh(using: runtime) }
             .onChange(of: reading.dataVersion) { _, _ in stats.refresh(using: runtime) }
         }
+    }
+
+    private var rowLayout: AnyLayout {
+        dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
+            : AnyLayout(HStackLayout())
     }
 
     private var todayText: String {

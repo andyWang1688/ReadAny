@@ -48,6 +48,8 @@ struct ReaderScreen: View {
     @EnvironmentObject private var aiSettings: AISettings
     @EnvironmentObject private var chat: ChatService
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var toolbarIconSize = 17
 
     @StateObject private var controller = ReaderController()
     @StateObject private var tts = ReaderSpeech()
@@ -242,52 +244,46 @@ struct ReaderScreen: View {
     // MARK: - 控制层
 
     private func topBar(_ book: LibraryStore.Book) -> some View {
-        HStack(spacing: 6) {
-            Button {
-                close()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.body.weight(.semibold))
-                    .frame(width: 30, height: 30)
-                    .contentShape(Rectangle())
-            }
-            .accessibilityIdentifier("reader.close")
-
-            // 标题和右边的 ☰ 都能开目录：标题管顺手，图标管「找得到」。
-            Button {
-                showTOC = true
-            } label: {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(book.title).font(.footnote.weight(.semibold)).lineLimit(1)
-                    Text(chapterSubtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Button {
+                    close()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: min(toolbarIconSize, 28), weight: .semibold))
+                        .frame(width: dynamicTypeSize.isAccessibilitySize ? 44 : 30, height: dynamicTypeSize.isAccessibilitySize ? 44 : 30)
+                        .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("reader.toc")
+                .accessibilityIdentifier("reader.close")
 
-            iconButton("list.bullet", id: "reader.tocButton") { showTOC = true }
-            iconButton("magnifyingglass", id: "reader.search") { showSearch = true }
-            iconButton(isBookmarked ? "bookmark.fill" : "bookmark", id: "reader.bookmark") { toggleBookmark() }
-                .accessibilityValue(isBookmarked ? "已加书签" : "未加书签")
-                .disabled(reading.cfi.isEmpty)
-            iconButton(tts.isSpeaking ? "stop.circle" : "speaker.wave.2", id: "reader.speech") { toggleSpeech() }
-                .accessibilityValue(tts.isSpeaking ? "speaking" : "idle")
-                // 正文还没取回来之前先别让点：否则只会弹「没有可朗读的正文」。
-                .disabled(reading.visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !tts.isSpeaking)
-            iconButton("sparkles", id: "reader.chat") {
-                chat.prepareForReading(reading.book)
-                showChat = true
+                // 标题和右边的 ☰ 都能开目录：标题管顺手，图标管「找得到」。
+                Button {
+                    showTOC = true
+                } label: {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(book.title).font(.footnote.weight(.semibold)).lineLimit(1)
+                        Text(chapterSubtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("reader.toc")
+
+                if !dynamicTypeSize.isAccessibilitySize { toolbarActions }
             }
-            iconButton("slider.horizontal.3", id: "reader.settings") { showSettings = true }
+            if dynamicTypeSize.isAccessibilitySize {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 12) { toolbarActions }
+                }
+            }
         }
         .font(.body)
         .foregroundStyle(Color(.label))
-        .frame(height: 30)
+        .frame(minHeight: 30)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background {
@@ -300,33 +296,57 @@ struct ReaderScreen: View {
         }
     }
 
-    private func iconButton(_ systemName: String, id: String, action: @escaping () -> Void) -> some View {
+    @ViewBuilder
+    private var toolbarActions: some View {
+        iconButton("list.bullet", id: "reader.tocButton", label: "目录") { showTOC = true }
+        iconButton("magnifyingglass", id: "reader.search", label: "查找正文") { showSearch = true }
+        iconButton(isBookmarked ? "bookmark.fill" : "bookmark", id: "reader.bookmark", label: isBookmarked ? "移除书签" : "添加书签") { toggleBookmark() }
+            .accessibilityValue(isBookmarked ? "已加书签" : "未加书签")
+            .disabled(reading.cfi.isEmpty)
+        iconButton(tts.isSpeaking ? "stop.circle" : "speaker.wave.2", id: "reader.speech", label: tts.isSpeaking ? "停止朗读" : "开始朗读") { toggleSpeech() }
+            .accessibilityValue(tts.isSpeaking ? "speaking" : "idle")
+            // 正文还没取回来之前先别让点：否则只会弹「没有可朗读的正文」。
+            .disabled(reading.visibleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !tts.isSpeaking)
+        iconButton("sparkles", id: "reader.chat", label: "AI 助手") {
+            chat.prepareForReading(reading.book)
+            showChat = true
+        }
+        iconButton("slider.horizontal.3", id: "reader.settings", label: "阅读设置") { showSettings = true }
+    }
+
+    private func iconButton(_ systemName: String, id: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .frame(width: 28, height: 30)
+                .font(.system(size: min(toolbarIconSize, 28)))
+                .frame(width: dynamicTypeSize.isAccessibilitySize ? 44 : 28, height: dynamicTypeSize.isAccessibilitySize ? 44 : 30)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(id)
+        .accessibilityLabel(label)
     }
 
     private var bottomBar: some View {
         // 只留三段信息：本章页码、全书百分比、剩余时间。轨道和图标都撤了。
-        HStack(spacing: 10) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout(spacing: 10))
+        return layout {
             Text(chapterProgressLabel)
                 .accessibilityIdentifier("reader.progress")
 
-            Spacer(minLength: 8)
+            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
 
             Text("全书 \(Int(sliderFraction * 100))%")
                 .accessibilityIdentifier("reader.percent")
 
             if let remainingLabel {
-                Spacer(minLength: 8)
+                if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
                 Text(remainingLabel)
                     .accessibilityIdentifier("reader.remaining")
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .font(.caption)
         .monospacedDigit()
         .foregroundStyle(.secondary)

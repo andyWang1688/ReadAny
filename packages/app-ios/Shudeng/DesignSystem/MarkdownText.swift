@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import SwiftUI
 
-/// AI 回答的 Markdown 渲染：正文交给 AttributedString，围栏代码块单独排版。
+/// 统一 AI 正文的段落层级，围栏代码块单独排版。
 struct MarkdownText: View {
     let text: String
     /// 这条内容还在流式输出（源码是半截的），mermaid 图表要等写完再画。
@@ -12,7 +12,8 @@ struct MarkdownText: View {
             ForEach(Array(MarkdownBlock.split(text).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .prose(let value):
-                    Text(Self.attributed(value))
+                    Text(MarkdownBlock.attributedProse(value))
+                        .lineSpacing(4)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 case .code(let language, let value):
@@ -42,11 +43,5 @@ struct MarkdownText: View {
                 }
             }
         }
-    }
-
-    /// Markdown 解析失败时退回原始文本，别让消息消失。
-    private static func attributed(_ value: String) -> AttributedString {
-        (try? AttributedString(markdown: value, options: .init(interpretedSyntax: .full)))
-            ?? AttributedString(value)
     }
 }
