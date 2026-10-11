@@ -40,9 +40,17 @@ final class LibraryStore: ObservableObject {
         let score: Double
 
         var id: String { "\(bookId)-\(chapterIndex)-\(content.prefix(16))" }
-        /// 回跳给阅读器的片段：一整段（chunk 里可能是多段拼的，取第一段就够定位）。
-        var jumpText: String {
-            content.split(separator: "\n").first.map(String.init) ?? content
+        /// 预览和回跳共用原文段落，优先显示字面匹配，避免重复章名。
+        func snippet(matching query: String) -> String {
+            let paragraphs = content.split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && $0.caseInsensitiveCompare(chapterTitle) != .orderedSame }
+            let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !keyword.isEmpty,
+               let match = paragraphs.first(where: { $0.range(of: keyword, options: .caseInsensitive) != nil }) {
+                return match
+            }
+            return paragraphs.first ?? content.trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 
@@ -127,6 +135,7 @@ final class LibraryStore: ObservableObject {
     /// 跨书语义检索的结果（边打字边搜，350ms 防抖）。
     @Published private(set) var semanticHits: [SemanticHit] = []
     @Published private(set) var semanticFailures: [SemanticFailure] = []
+    @Published private(set) var semanticError: String?
     @Published private(set) var isSearchingSemantics = false
     /// 已建索引的书，给书封上的标记和上下文菜单用。
     @Published private(set) var indexedBooks: [VectorizedBook] = []
@@ -135,6 +144,7 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var indexingProgress: Double = 0
     @Published private(set) var indexError: String?
     @Published private(set) var pendingIndexDeletion: Book?
+    @Published private(set) var failedIndexBook: Book?
 
     private let coverCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
@@ -252,6 +262,7 @@ final class LibraryStore: ObservableObject {
         indexGeneration += 1
         let generation = indexGeneration
         indexError = nil
+        failedIndexBook = nil
         indexingBookId = book.id
         indexingProgress = 0
         startIndexPolling(using: runtime)
@@ -259,13 +270,26 @@ final class LibraryStore: ObservableObject {
             [weak self] json in
             guard let self, generation == self.indexGeneration else { return }
             if let message = Self.errorMessage(from: json) {
-                self.indexError = "《\(book.title)》建索引失败：\(message)"
+                self.recordIndexFailure(message, bookId: book.id, title: book.title)
             }
             self.indexGeneration += 1
             self.indexingBookId = nil
             self.stopIndexPolling()
             self.refresh(using: runtime)
         }
+    }
+
+    private func recordIndexFailure(_ message: String, bookId: String?, title: String) {
+        failedIndexBook = books.first { $0.id == bookId }
+        let explanation: String
+        if message.contains("文件不存在") || message.contains("No such file") {
+            explanation = "无法读取书籍文件，请确认文件可用后重试。"
+        } else if message.contains("语言模型") {
+            explanation = "系统语言模型暂时无法处理这本书，请稍后重试。"
+        } else {
+            explanation = "暂时无法建立索引，请稍后重试。"
+        }
+        indexError = "《\(title)》\(explanation)已保存的笔记不受影响。"
     }
 
     func deleteIndex(for book: Book, using runtime: RuntimeHost) {
@@ -294,6 +318,7 @@ final class LibraryStore: ObservableObject {
             stopIndexPolling()
         }
         if pendingIndexDeletion?.id == book.id { pendingIndexDeletion = nil }
+        if failedIndexBook?.id == book.id { failedIndexBook = nil }
         indexError = nil
         semanticHits = []
         refresh(using: runtime)
@@ -339,7 +364,7 @@ final class LibraryStore: ObservableObject {
             indexingBookId = nil
             stopIndexPolling()
             if let message = status.error {
-                indexError = "《\(status.title ?? "这本书")》建索引失败：\(message)"
+                recordIndexFailure(message, bookId: status.bookId, title: status.title ?? "这本书")
             }
             refresh(using: runtime)
         default:
@@ -352,6 +377,7 @@ final class LibraryStore: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         searchGeneration += 1
         let generation = searchGeneration
+        semanticError = nil
         guard runtime.state == .ready, trimmed.count >= 2, !indexedBooks.isEmpty else {
             isSearchingSemantics = false
             semanticHits = []
@@ -377,6 +403,7 @@ final class LibraryStore: ObservableObject {
         guard let response = try? JSONDecoder().decode(Response.self, from: Data(json.utf8)) else {
             semanticHits = []
             semanticFailures = []
+            semanticError = "段落搜索暂时失败，书籍和索引已保留，请重试。"
             return
         }
         semanticHits = response.results
@@ -410,6 +437,10 @@ final class LibraryStore: ObservableObject {
         do {
             _ = try runtime.appJSON("ShudengApp.deleteBook(\(json))", timeout: 60)
             if pendingIndexDeletion?.id == book.id { pendingIndexDeletion = nil }
+            if failedIndexBook?.id == book.id {
+                failedIndexBook = nil
+                indexError = nil
+            }
             let fileURL = runtime.rootDirectory.appendingPathComponent(book.filePath)
             try? FileManager.default.removeItem(at: fileURL)
             if let cover = book.coverRelativePath {

@@ -69,6 +69,7 @@ import Foundation
                 for deletion in [false, true] {
                     let host = RuntimeHost(), store = LibraryStore()
                     let scenario = "\(sameBook ? "same" : "other")/\(terminal)/\(deletion ? "delete" : "poll")"
+                    store.books = [first, next]
                     store.buildIndex(for: first, using: host)
                     var finished = false
                     // These already-queued poll/user events can run before the native result's extra queue hop.
@@ -82,7 +83,7 @@ import Foundation
                         } else {
                             store.pollIndexStatus(using: host)
                             if terminal == "error" {
-                                expect(store.indexError?.contains("A failed") == true,
+                                expect(store.indexError?.contains("暂时无法建立索引") == true && store.failedIndexBook?.id == first.id,
                                        scenario + " poll must keep the current failure visible")
                             }
                         }
@@ -92,7 +93,7 @@ import Foundation
                         expect(store.indexingBookId == next.id && host.callbacks.count == 2,
                                scenario + " next user request must start")
                         DispatchQueue.main.async {
-                            expect(store.indexingBookId == next.id && store.indexError == nil,
+                            expect(store.indexingBookId == next.id && store.indexError == nil && store.failedIndexBook == nil,
                                    scenario + " old callback must not finish or fail the new request")
                             host.progress = 0.42
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.55) {
@@ -100,7 +101,7 @@ import Foundation
                                        scenario + " new request must continue reporting progress")
                                 host.nativeResult(1, status: "error", json: #"{"error":"B failed"}"#)
                                 DispatchQueue.main.async {
-                                    expect(store.indexingBookId == nil && store.indexError?.contains("B failed") == true,
+                                    expect(store.indexingBookId == nil && store.indexError?.contains("暂时无法建立索引") == true && store.failedIndexBook?.id == next.id,
                                            scenario + " current callback must still finish with its own error")
                                     finished = true
                                 }
@@ -115,6 +116,14 @@ import Foundation
                 }
             }
         }
+        let store = LibraryStore()
+        store.books = [first]
+        store.recordIndexFailure("文件操作失败: 文件不存在: /private/test.epub", bookId: first.id, title: first.title)
+        expect(store.indexError?.contains("无法读取书籍文件") == true && store.indexError?.contains("/private") == false,
+               "missing file has readable guidance without internal path")
+        expect(store.failedIndexBook?.id == first.id, "retry retains the actual failed book")
+        store.recordIndexFailure("系统语言模型不可用", bookId: first.id, title: first.title)
+        expect(store.indexError?.contains("系统语言模型暂时无法处理") == true, "model failure explains the language boundary")
         guard failures == 0 else { print("\(failures)/\(checks) failed"); exit(1) }
         print("Index task state regression passed (8 scenarios, \(checks) checks)")
     }

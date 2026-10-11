@@ -191,6 +191,8 @@
     let searchGenerator = null;
     let searchResults = [];
     let searchIndex = 0;
+    let searchGeneration = 0;
+    let searchRequestId = null;
     let currentSectionIndex = 0;
     let totalSections = 0;
     let currentThemeColors = { bg: '#1c1c1e', fg: '#e8e8ed', muted: '#7c7c82', primary: '#3b82f6' };
@@ -1304,9 +1306,11 @@
           if (view && msg.text) await goToText(msg.text);
           break;
         case 'search':
-          await handleSearch(msg.query);
+          await handleSearch(msg.query, msg.requestId);
           break;
         case 'clearSearch':
+          searchGeneration++;
+          searchRequestId = null;
           if (view) view.clearSearch();
           searchResults = [];
           searchIndex = 0;
@@ -1833,48 +1837,66 @@
     }
 
     // ─── Search ───
-    async function handleSearch(query) {
+    async function handleSearch(query, requestId) {
       if (!view || !query) return;
+      const generation = ++searchGeneration;
+      const results = [];
       searchResults = [];
       searchIndex = 0;
+      searchRequestId = requestId;
+      let failureContext = 'search';
 
       try {
         const iter = view.search({ query });
         let totalResults = 0;
         for await (const result of iter) {
+          if (generation !== searchGeneration) return;
           if (result === 'done') break;
           if (result.subitems) {
             totalResults += result.subitems.length;
             for (const sub of result.subitems) {
-              searchResults.push(sub);
+              results.push(sub);
             }
           } else if (result.cfi) {
             totalResults++;
-            searchResults.push(result);
+            results.push(result);
           }
           if (result.progress != null) {
             postToRN('searchProgress', { progress: result.progress });
           }
         }
-        postToRN('searchComplete', { count: totalResults });
+        if (generation !== searchGeneration) return;
+        searchResults = results;
+        postToRN('searchComplete', { count: totalResults, requestId });
         // Navigate to first result
-        if (searchResults.length > 0) {
-          await view.goTo(searchResults[0].cfi);
-          postToRN('searchResult', { index: 0, count: totalResults });
+        if (results.length > 0) {
+          failureContext = 'searchNavigation';
+          await view.goTo(results[0].cfi);
+          if (generation === searchGeneration) {
+            postToRN('searchResult', { index: 0, count: totalResults, requestId });
+          }
         }
       } catch (err) {
-        postToRN('error', { message: 'Search failed: ' + String(err) });
+        if (generation === searchGeneration) {
+          postToRN('error', { message: 'Search failed: ' + String(err), requestId, context: failureContext, index: failureContext === 'searchNavigation' ? 0 : undefined });
+        }
       }
     }
 
     async function navigateToSearchResult(index) {
       if (index < 0 || index >= searchResults.length) return;
-      searchIndex = index;
+      const generation = searchGeneration;
+      const requestId = searchRequestId;
       try {
         await view.goTo(searchResults[index].cfi);
-        postToRN('searchResult', { index, count: searchResults.length });
+        if (generation === searchGeneration) {
+          searchIndex = index;
+          postToRN('searchResult', { index, count: searchResults.length, requestId });
+        }
       } catch (err) {
-        postToRN('error', { message: 'Navigate search failed: ' + String(err) });
+        if (generation === searchGeneration) {
+          postToRN('error', { message: 'Navigate search failed: ' + String(err), requestId, context: 'searchNavigation', index });
+        }
       }
     }
 
@@ -4374,7 +4396,7 @@ html, body {
     window.goToProgress = function (p) { if (view) view.goToFraction(p); };
     window.search = function (q) { handleSearch(q); };
     window.navigateSearch = function (idx) { navigateToSearchResult(idx); };
-    window.clearSearch = function () { if (view) view.clearSearch(); searchResults = []; };
+    window.clearSearch = function () { searchGeneration++; searchRequestId = null; if (view) view.clearSearch(); searchResults = []; };
     window.setFontSize = function (s) { applySettings({ fontSize: s }); };
     window.setLineHeight = function (lh) { applySettings({ lineHeight: lh }); };
     window.setParagraphSpacing = function (s) { applySettings({ paragraphSpacing: s }); };

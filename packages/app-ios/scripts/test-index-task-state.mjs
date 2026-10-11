@@ -22,6 +22,7 @@ const types = library.slice(
 const methods = [
   "func buildIndex(",
   "func deleteIndex(",
+  "private func recordIndexFailure(",
   "func refreshIndex(",
   "private func startIndexPolling(",
   "private func stopIndexPolling(",
@@ -36,7 +37,7 @@ try {
   const source = join(scratch, "LibraryStore.swift");
   writeFileSync(
     source,
-    `import Foundation\n@MainActor final class LibraryStore {\n${types}var indexedBooks: [VectorizedBook] = [], semanticHits: [SemanticHit] = []\nvar indexingBookId: String?, indexError: String?, indexTimer: Timer?\nvar pendingIndexDeletion: Book?\nvar indexingProgress = 0.0, indexGeneration = 0\nfunc refresh(using runtime: RuntimeHost) { refreshIndex(using: runtime) }\n${methods}\n}\n`,
+    `import Foundation\n@MainActor final class LibraryStore {\n${types}var indexedBooks: [VectorizedBook] = [], semanticHits: [SemanticHit] = []\nvar indexingBookId: String?, indexError: String?, indexTimer: Timer?\nvar pendingIndexDeletion: Book?, failedIndexBook: Book?\nvar books: [Book] = []\nvar indexingProgress = 0.0, indexGeneration = 0\nfunc refresh(using runtime: RuntimeHost) { refreshIndex(using: runtime) }\n${methods}\n}\n`,
   );
   const executable = join(scratch, "test");
   execFileSync(

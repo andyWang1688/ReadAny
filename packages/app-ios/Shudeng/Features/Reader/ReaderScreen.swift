@@ -78,6 +78,11 @@ struct ReaderScreen: View {
     @State private var searchQuery = ""
     @State private var searchCount = 0
     @State private var searchIndex = 0
+    private enum SearchStatus { case idle, searching, complete, failed }
+    @State private var searchStatus: SearchStatus = .idle
+    @State private var searchRequestID = 0
+    @State private var searchIsNavigating = false
+    @State private var searchFailedNavigationIndex: Int?
     @State private var bookmarks: [BookmarkItem] = []
     @State private var pushedBookmarkState: Bool?
     @State private var noteDraft = ""
@@ -794,6 +799,24 @@ struct ReaderScreen: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
+    private func submitSearch() {
+        guard !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        searchCount = 0
+        searchIndex = 0
+        searchIsNavigating = false
+        searchFailedNavigationIndex = nil
+        searchStatus = .searching
+        searchRequestID += 1
+        controller.send(["type": "search", "query": searchQuery, "requestId": searchRequestID])
+    }
+
+    private func navigateSearch(to index: Int) {
+        guard !searchIsNavigating, index >= 0, index < searchCount else { return }
+        searchFailedNavigationIndex = nil
+        searchIsNavigating = true
+        controller.send(["type": "navigateSearch", "index": index])
+    }
+
     private var searchSheet: some View {
         NavigationStack {
             List {
@@ -802,23 +825,62 @@ struct ReaderScreen: View {
                     TextField("书内搜索", text: $searchQuery)
                         .accessibilityIdentifier("reader.searchField")
                         .submitLabel(.search)
-                        .onSubmit {
+                        .onChange(of: searchQuery) { _, _ in
+                            searchRequestID += 1
                             searchCount = 0
                             searchIndex = 0
-                            controller.send(["type": "search", "query": searchQuery])
+                            searchStatus = .idle
+                            searchIsNavigating = false
+                            searchFailedNavigationIndex = nil
+                            controller.send(["type": "clearSearch"])
                         }
+                        .onSubmit { submitSearch() }
                 }
                 if searchCount > 0 {
                     LabeledContent("结果", value: "\(searchIndex + 1) / \(searchCount)")
+                        .accessibilityIdentifier("reader.searchResult")
                     HStack {
                         Button("上一个") {
-                            controller.send(["type": "navigateSearch", "index": max(0, searchIndex - 1)])
+                            navigateSearch(to: max(0, searchIndex - 1))
                         }
+                        .accessibilityIdentifier("reader.searchPrevious")
+                        .disabled(searchIndex == 0 || searchIsNavigating)
                         Spacer()
                         Button("下一个") {
-                            controller.send(["type": "navigateSearch", "index": min(searchCount - 1, searchIndex + 1)])
+                            navigateSearch(to: min(searchCount - 1, searchIndex + 1))
                         }
+                        .accessibilityIdentifier("reader.searchNext")
+                        .disabled(searchIndex >= searchCount - 1 || searchIsNavigating)
                     }
+                    .buttonStyle(.borderless)
+                    if searchIsNavigating {
+                        ProgressView("正在跳转…")
+                            .accessibilityIdentifier("reader.searchNavigationLoading")
+                    } else if let index = searchFailedNavigationIndex {
+                        Text("暂时无法跳到这处结果，请重试。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("reader.searchNavigationError")
+                        Button("重试跳转") { navigateSearch(to: index) }
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("reader.searchNavigationRetry")
+                    }
+                } else if searchStatus == .searching {
+                    ProgressView("正在搜索…")
+                        .accessibilityIdentifier("reader.searchLoading")
+                } else if searchStatus == .complete {
+                    Text("没有找到匹配的正文，试试其他关键词。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("reader.searchEmpty")
+                } else if searchStatus == .failed {
+                    Text("搜索暂时无法完成，请重试。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("reader.searchError")
+                    Button("重试") { submitSearch() }
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("reader.searchRetry")
                 } else {
                     Text("输入关键词后回车，会跳到第一处并高亮。")
                         .font(.footnote)
@@ -832,15 +894,21 @@ struct ReaderScreen: View {
                     Button("清除") {
                         searchQuery = ""
                         searchCount = 0
+                        searchIndex = 0
+                        searchStatus = .idle
+                        searchIsNavigating = false
+                        searchFailedNavigationIndex = nil
                         controller.send(["type": "clearSearch"])
                     }
+                    .accessibilityIdentifier("reader.searchClear")
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { showSearch = false }
+                        .accessibilityIdentifier("reader.searchClose")
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     /// 选中文本翻译：走和对话同一个 AI 端点（core 的 aiTranslate）。
@@ -1337,6 +1405,20 @@ struct ReaderScreen: View {
                 reading.pendingLocation = nil
             }
         case "error":
+            if let context = event["context"] as? String,
+               context == "search" || context == "searchNavigation" {
+                guard event["requestId"] as? Int == searchRequestID else { return }
+                searchIsNavigating = false
+                if context == "searchNavigation" {
+                    searchFailedNavigationIndex = event["index"] as? Int ?? searchIndex
+                } else {
+                    searchCount = 0
+                    searchIndex = 0
+                    searchFailedNavigationIndex = nil
+                    searchStatus = .failed
+                }
+                return
+            }
             isLoading = false
             flash(event["message"] as? String ?? "阅读器出错")
         case "toc":
@@ -1403,11 +1485,18 @@ struct ReaderScreen: View {
         case "tap":
             if selection == nil { showControls.toggle() }
         case "searchComplete":
+            guard searchStatus == .searching, event["requestId"] as? Int == searchRequestID else { return }
             searchCount = event["count"] as? Int ?? 0
             searchIndex = 0
+            searchStatus = .complete
+            searchIsNavigating = searchCount > 0
+            searchFailedNavigationIndex = nil
         case "searchResult":
+            guard searchStatus == .complete, event["requestId"] as? Int == searchRequestID else { return }
             searchIndex = event["index"] as? Int ?? 0
             searchCount = event["count"] as? Int ?? searchCount
+            searchIsNavigating = false
+            searchFailedNavigationIndex = nil
         case "visibleText":
             reading.setVisibleText(event["text"] as? String ?? "")
         case "visibleTTSSegments":

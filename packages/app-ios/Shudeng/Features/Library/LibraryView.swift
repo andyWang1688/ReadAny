@@ -3,6 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct LibraryView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var runtime: RuntimeHost
     @EnvironmentObject private var reading: ReadingSession
     @StateObject private var store = LibraryStore()
@@ -11,7 +12,11 @@ struct LibraryView: View {
     /// 搜索框焦点：键盘上的「收起键盘」和点空白处都要能把它放掉。
     @FocusState private var searchFocused: Bool
 
-    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 20)]
+    private var columns: [GridItem] {
+        dynamicTypeSize.isAccessibilitySize
+            ? [GridItem(.flexible())]
+            : [GridItem(.adaptive(minimum: 104), spacing: 20, alignment: .top)]
+    }
 
     var body: some View {
         NavigationStack {
@@ -51,8 +56,9 @@ struct LibraryView: View {
                 .padding(.bottom, 28)
             }
             .scrollDismissesKeyboard(.immediately)
-            .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
-            .background(Color(.systemBackground))
+            .background(Color(.systemBackground).onTapGesture { searchFocused = false })
+            .navigationTitle("书架")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 Button {
                     showImporter = true
@@ -60,6 +66,7 @@ struct LibraryView: View {
                     Image(systemName: "plus")
                 }
                 .accessibilityIdentifier("library.import")
+                .accessibilityLabel("导入书籍")
                 .disabled(runtime.state != .ready)
                 Button {
                     store.refresh(using: runtime)
@@ -67,6 +74,7 @@ struct LibraryView: View {
                     Image(systemName: "arrow.clockwise")
                 }
                 .accessibilityIdentifier("library.refresh")
+                .accessibilityLabel("刷新书架")
                 .disabled(runtime.state != .ready)
             }
             .fileImporter(
@@ -98,8 +106,9 @@ struct LibraryView: View {
                 guard !Task.isCancelled else { return }
                 await store.searchSemantics(query: store.query, using: runtime)
             }
-            // 索引建完（已建索引的书变多）时把当前搜索重跑一次，不然结果要等下次打字才出来。
-            .task(id: store.indexedBooks.count) {
+            // 索引集合变化或重建结束时，重跑当前关键词；正在建索引时不启动这次检索。
+            .task(id: store.indexedBooks.map(\.bookId) + [store.indexingBookId ?? ""]) {
+                guard store.indexingBookId == nil else { return }
                 await store.searchSemantics(query: store.query, using: runtime)
             }
             .onChange(of: runtime.state) { _, _ in store.refresh(using: runtime) }
@@ -118,7 +127,7 @@ struct LibraryView: View {
     private func open(_ hit: LibraryStore.SemanticHit) {
         guard let book = store.books.first(where: { $0.id == hit.bookId }) else { return }
         reading.pendingLocation = nil
-        reading.pendingSnippet = hit.jumpText
+        reading.pendingSnippet = hit.snippet(matching: store.query)
         reading.book = book
         reading.isReaderPresented = true
     }
@@ -134,6 +143,35 @@ struct LibraryView: View {
                     .padding(.bottom, 6)
                 .accessibilityIdentifier("library.semanticHeader")
 
+                if let error = store.semanticError {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("library.semanticError")
+                        Button {
+                            Task { await store.searchSemantics(query: store.query, using: runtime) }
+                        } label: {
+                            Text("重试").frame(minHeight: 44)
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .accessibilityIdentifier("library.semanticRetry")
+                        .disabled(store.isSearchingSemantics)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                } else if !store.isSearchingSemantics && store.semanticHits.isEmpty && store.semanticFailures.isEmpty {
+                    Text(store.query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2
+                         ? "输入至少两个字后，可以按意思找段落。"
+                         : "没有找到匹配的段落，试试其他关键词。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .accessibilityIdentifier("library.semanticEmpty")
+                }
+
                 ForEach(store.semanticHits) { hit in
                     Button {
                         open(hit)
@@ -142,12 +180,12 @@ struct LibraryView: View {
                             Text(hit.chapterTitle.isEmpty ? hit.bookTitle : hit.chapterTitle)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
                             Text(hit.bookTitle)
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                            Text(hit.content.replacingOccurrences(of: "\n", with: " "))
+                                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                            Text(hit.snippet(matching: store.query))
                                 .font(.callout)
                                 .foregroundStyle(Color.primary)
                                 .lineLimit(3)
@@ -163,11 +201,30 @@ struct LibraryView: View {
                 }
 
                 ForEach(store.semanticFailures, id: \.bookId) { failure in
-                    Text("这本书的索引要重建：\(failure.message)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 20)
-                        .padding(.top, 8)
+                    let book = store.books.first { $0.id == failure.bookId }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("《\(book?.title ?? "这本书")》的索引暂时无法使用。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("library.semanticBookError")
+                        if let book {
+                            Text("重建索引后再试，原书和笔记会保留。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button {
+                                store.buildIndex(for: book, using: runtime)
+                            } label: {
+                                Text(store.indexingBookId == book.id ? "正在重建…" : "重建索引")
+                                    .frame(minHeight: 44)
+                            }
+                            .font(.footnote.weight(.semibold))
+                            .buttonStyle(.bordered)
+                            .accessibilityIdentifier("library.semanticRebuild")
+                            .disabled(store.indexingBookId != nil)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
                 }
             }
         } else if !store.books.isEmpty {
@@ -183,12 +240,15 @@ struct LibraryView: View {
             Image(systemName: "magnifyingglass")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            TextField("搜索书名 / 作者", text: $store.query)
+            TextField(dynamicTypeSize.isAccessibilitySize ? "搜索书籍" : "搜索书名 / 作者", text: $store.query)
                 .focused($searchFocused)
+                .submitLabel(.search)
                 .onSubmit { searchFocused = false }
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .font(.subheadline)
+                .accessibilityIdentifier("library.searchField")
+                .accessibilityLabel("搜索书名或作者")
             if !store.query.isEmpty {
                 Button {
                     store.query = ""
@@ -202,18 +262,21 @@ struct LibraryView: View {
             }
         }
         .padding(.horizontal, 10)
-        .frame(height: 38)
+        .padding(.vertical, 8)
+        .frame(minHeight: 38)
         .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Color(.secondarySystemFill)))
     }
 
     private var filterRow: some View {
         HStack(spacing: 12) {
-            Picker("筛选", selection: $store.filter) {
-                ForEach(LibraryStore.ReadingFilter.allCases) { item in
-                    Text(item.label).tag(item)
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    readingFilter.pickerStyle(.menu)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    readingFilter.pickerStyle(.segmented)
                 }
             }
-            .pickerStyle(.segmented)
             .accessibilityIdentifier("library.filter")
 
             Menu {
@@ -227,10 +290,19 @@ struct LibraryView: View {
             } label: {
                 Image(systemName: "arrow.up.arrow.down")
                     .font(.subheadline.weight(.medium))
-                    .frame(width: 30, height: 30)
+                    .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    .frame(width: 44, height: 44)
             }
             .accessibilityLabel(store.sort.label)
             .accessibilityIdentifier("library.sort")
+        }
+    }
+
+    private var readingFilter: some View {
+        Picker("筛选", selection: $store.filter) {
+            ForEach(LibraryStore.ReadingFilter.allCases) { item in
+                Text(item.label).tag(item)
+            }
         }
     }
 
@@ -242,6 +314,16 @@ struct LibraryView: View {
             }
             if let indexError = store.indexError {
                 Text(indexError)
+                    .accessibilityIdentifier("library.indexError")
+            }
+            if let book = store.failedIndexBook {
+                Button { store.buildIndex(for: book, using: runtime) } label: {
+                    Text("重试建立索引").frame(minHeight: 44)
+                }
+                .buttonStyle(.bordered)
+                .disabled(store.indexingBookId != nil)
+                .foregroundStyle(.primary)
+                .accessibilityIdentifier("library.retryIndexBuild")
             }
             if let book = store.pendingIndexDeletion {
                 Button("重试删除《\(book.title)》索引") {
@@ -264,22 +346,33 @@ struct LibraryView: View {
         Button {
             open(book)
         } label: {
-            VStack(alignment: .leading, spacing: 7) {
-                cover(book, width: nil)
-                if book.progressValue > 0 {
-                    ThinProgressBar(value: book.progressValue, height: 2)
+            let layout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(HStackLayout(alignment: .top, spacing: 14))
+                : AnyLayout(VStackLayout(alignment: .leading, spacing: 7))
+            layout {
+                VStack(spacing: 7) {
+                    cover(book, width: dynamicTypeSize.isAccessibilitySize ? 72 : nil)
+                        .dynamicTypeSize(dynamicTypeSize.isAccessibilitySize ? .large : dynamicTypeSize)
+                    if book.progressValue > 0 {
+                        ThinProgressBar(value: book.progressValue, height: 2)
+                    }
                 }
-                Text(book.title)
-                    .font(.footnote.weight(.medium))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                if store.indexingBookId == book.id {
-                    Text("建索引 \(Int(store.indexingProgress * 100))%")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                .frame(width: dynamicTypeSize.isAccessibilitySize ? 72 : nil)
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(book.title)
+                        .font(.footnote.weight(.medium))
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                        .multilineTextAlignment(.leading)
+                    if store.indexingBookId == book.id {
+                        Text("建索引 \(Int(store.indexingProgress * 100))%")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("library.book")

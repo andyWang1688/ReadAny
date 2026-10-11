@@ -28,7 +28,8 @@ try {
 final class LibraryStore {
 ${types}
 var indexedBooks: [VectorizedBook] = []
-var pendingIndexDeletion: Book?
+var pendingIndexDeletion: Book?, failedIndexBook: Book?
+var books: [Book] = []
 var semanticHits = [SemanticHit(bookId: "b", bookTitle: "Book", chapterIndex: 0, chapterTitle: "chapter", content: "hit", score: 1)]
 var indexError: String?, indexingBookId: String? = "b"
 var indexingProgress = 0.5, stopped = 0, indexGeneration = 0
@@ -38,6 +39,7 @@ static func embeddingInfo(using runtime: RuntimeHost) -> EmbeddingInfo? { nil }
 ${method(library, "func refreshIndex(")}
 ${method(library, "func deleteIndex(")}
 ${method(library, "private func pollIndexStatus(")}
+${method(library, "private func recordIndexFailure(")}
 ${method(library, "static func payload(")}
 }
 final class VectorProbe {
